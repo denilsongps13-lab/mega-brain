@@ -1,0 +1,24 @@
+name: Reputacao 5 Estrelas
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/reputacao-5-estrelas]
+
+jobs:
+  reputacao:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm install
+      - name: Smoke test Reputacao 5 Estrelas
+        run: npm run validate:reputacao
+      - name: CLI help
+        run: node bin/mega-brain.js reputacao
+      - name: CLI diagnostico
+        run: node bin/mega-brain.js reputacao analisar "Empresa CI" --nota 3.9 --avaliacoes 15 --sem-resposta 3 --negativas 1
