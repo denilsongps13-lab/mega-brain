@@ -10,6 +10,7 @@ FILES = [
     'INICIAR_MEGA_CEREBRO.cmd', 'TESTAR_MEGA_CEREBRO.cmd',
     'scripts/start_mega_brain.py', 'scripts/start_mega_brain_v2.py',
     '.claude/hooks/run-hook.cjs',
+    'mega-brain-core/package.json',
     'mega-brain-core/core/synapse/runtime/hook-runtime.js',
     'mega-brain-core/hooks/unified/runners/precompact-runner.js',
 ]
