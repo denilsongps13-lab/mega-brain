@@ -40,8 +40,8 @@ class Fixture(unittest.TestCase):
         body = base64.b64encode(b"print('INSTALLER_BOOTSTRAP_OK')")
         script = self.root / 'installer.cmd'
         script.write_bytes((scaffold + b'\nREM MEGA_PAYLOAD\n' + body + b'\n').replace(b'\n', b'\r\n'))
-        result = subprocess.run(['cmd.exe', '/d', '/c', str(script)], capture_output=True, timeout=30)
-        self.assertEqual(0, result.returncode)
+        result = subprocess.run(f'cmd.exe /d /s /c ""{script}""', capture_output=True, timeout=30)
+        self.assertEqual(0, result.returncode, repr(result.stdout + result.stderr))
         self.assertIn(b'INSTALLER_BOOTSTRAP_OK', result.stdout)
 
     def test_offline_installer_preserves_settings_env_and_backs_up_files(self):
