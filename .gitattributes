@@ -17,3 +17,6 @@ scripts/*.sh text eol=lf
 *.gif binary
 *.ico binary
 *.pdf binary
+
+# Windows double-click launchers
+*.cmd text eol=crlf

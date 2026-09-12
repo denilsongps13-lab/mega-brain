@@ -1,0 +1,349 @@
+"""Windows launcher: existing hooks -> portable runner; Claude -> local LiteLLM -> Gemini.
+Never prints provider credentials or raw provider/CLI error bodies.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import importlib.metadata
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import sysconfig
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+ROOT = Path(__file__).resolve().parents[1]
+MODEL = 'gemini/gemini-3.6-flash'
+KEY_NAMES = ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY')
+
+
+class StartupError(Exception):
+    pass
+
+
+def load_provider_key(root):
+    # dotenv is already a LiteLLM dependency. No shell evaluation or interpolation.
+    from dotenv import dotenv_values
+    values = dotenv_values(root / '.env', interpolate=False, encoding='utf-8-sig')
+    for name in KEY_NAMES:
+        value = values.get(name)
+        if value and value.strip():
+            return value.strip()
+    raise StartupError('Chave Gemini ausente no .env local. O arquivo nao foi alterado.')
+
+
+def find_bash(env):
+    candidates = []
+    if env.get('CLAUDE_CODE_GIT_BASH_PATH'):
+        candidates.append(Path(env['CLAUDE_CODE_GIT_BASH_PATH']))
+    git = shutil.which('git', path=env.get('PATH'))
+    if git:
+        base = Path(git).resolve().parent.parent
+        candidates += [base / 'bin/bash.exe', base / 'usr/bin/bash.exe']
+    for var, suffix in [('ProgramFiles', 'Git'), ('ProgramFiles(x86)', 'Git'), ('LOCALAPPDATA', 'Programs/Git')]:
+        if env.get(var):
+            base = Path(env[var]) / suffix
+            candidates += [base / 'bin/bash.exe', base / 'usr/bin/bash.exe']
+    if os.name != 'nt' and shutil.which('bash'):
+        candidates.append(Path(shutil.which('bash')))
+    for p in candidates:
+        if p.is_file():
+            probe = subprocess.run([str(p), '--version'], capture_output=True, timeout=10)
+            if probe.returncode == 0:
+                return p.resolve()
+    raise StartupError('Git Bash nao encontrado. Repare a instalacao do Git for Windows.')
+
+
+def child_environment(base, bash):
+    env = dict(base)
+    env.update(MEGA_BRAIN_PYTHON=sys.executable, CLAUDE_CODE_GIT_BASH_PATH=str(bash),
+               CLAUDE_PROJECT_DIR=str(ROOT), PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
+    directories = [str(Path(sys.executable).parent), sysconfig.get_path('scripts'), str(bash.parent)]
+    if os.name == 'nt':
+        git_root = bash.parent.parent if bash.parent.name == 'bin' else bash.parent
+        if git_root.name == 'usr':
+            git_root = git_root.parent
+        directories += [str(git_root / 'bin'), str(git_root / 'usr/bin')]
+    env['PATH'] = os.pathsep.join(directories + [env.get('PATH', '')])
+    return env
+
+
+def hook_target(command):
+    # Recognize only stock Mega Brain commands, not arbitrary custom hook text.
+    patterns = [
+        r'bash "\$CLAUDE_PROJECT_DIR/\.claude/hooks/pyrun\.sh" "\$CLAUDE_PROJECT_DIR/\.claude/hooks/([\w-]+\.py)"',
+        r'(?:bash|node) "\$CLAUDE_PROJECT_DIR/\.claude/hooks/([\w-]+\.(?:sh|js))"',
+        r'\.claude/hooks/([\w-]+\.py)',
+        r'node "[^"\r\n]+/\.claude/hooks/run-hook\.cjs" "([\w-]+\.(?:py|sh|js))"',
+    ]
+    for pattern in patterns:
+        match = re.fullmatch(pattern, command)
+        if match:
+            return match.group(1)
+    return None
+
+
+def converted_settings(settings, root):
+    result = copy.deepcopy(settings)
+    runner = (root / '.claude/hooks/run-hook.cjs').as_posix()
+    # Quoted paths support spaces and &, but these characters expand in shells.
+    if any(c in runner for c in ('"', '%', '!', '$', '`', '\n', '\r')):
+        raise StartupError('Use uma pasta sem aspas, %, !, $, crase ou quebras de linha.')
+    count = 0
+    for groups in result.get('hooks', {}).values():
+        for group in groups:
+            for hook in group.get('hooks', []):
+                if hook.get('type') != 'command':
+                    continue
+                target = hook_target(hook.get('command', ''))
+                if target:
+                    if not (root / '.claude/hooks' / target).is_file():
+                        raise StartupError('Um hook registrado esta ausente. Nenhuma configuracao foi substituida.')
+                    command = f'node "{runner}" "{target}"'
+                    if hook['command'] != command:
+                        hook['command'] = command
+                        count += 1
+    return result, count
+
+
+def repair_hooks(root):
+    changes = []
+    for name in ('settings.json', 'settings.local.json'):
+        path = root / '.claude' / name
+        if not path.exists():
+            continue
+        raw = path.read_bytes()
+        try:
+            original = json.loads(raw.decode('utf-8-sig'))
+            updated, count = converted_settings(original, root)
+        except (ValueError, TypeError, AttributeError):
+            raise StartupError('Settings JSON invalido. Corrija o arquivo antes de iniciar.') from None
+        if count:
+            changes.append((path, raw, updated, count))
+    if not changes:
+        return 0
+    backup = root / '.data/mega-brain/backups' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '-' + secrets.token_hex(4))
+    backup.mkdir(parents=True, mode=0o700)
+    # Back up every original before the first mutation. Never back up the .env.
+    for path, raw, _, _ in changes:
+        (backup / path.name).write_bytes(raw)
+    for path, raw, updated, _ in changes:
+        if path.read_bytes() != raw:
+            raise StartupError('Settings mudou durante a preparacao. Inicie novamente.')
+        fd, temporary = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+                json.dump(updated, stream, ensure_ascii=False, indent=2)
+                stream.write('\n')
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    return sum(c[3] for c in changes)
+
+
+def select_port():
+    # Do not terminate, attach to, or reconfigure the user's existing port 4000 server.
+    for port in range(4000, 4021):
+        with socket.socket() as sock:
+            try:
+                sock.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                pass
+    raise StartupError('Portas 4000 a 4020 ocupadas. Feche uma ponte antiga e tente novamente.')
+
+
+def proxy_config(model):
+    return {'model_list': [{'model_name': model, 'litellm_params': {
+        'model': model, 'api_key': 'os.environ/GEMINI_API_KEY'}}],
+        'general_settings': {'master_key': 'os.environ/MEGA_BRAIN_GATEWAY_TOKEN'},
+        'litellm_settings': {'drop_params': True, 'set_verbose': False}}
+
+
+def client_settings(url, model, token, env):
+    # Session-only overlay: does not replace hooks, permissions, skills or agents.
+    values = {k: env[k] for k in ('PATH', 'MEGA_BRAIN_PYTHON', 'CLAUDE_PROJECT_DIR',
+                                  'CLAUDE_CODE_GIT_BASH_PATH', 'PYTHONUTF8', 'PYTHONIOENCODING')}
+    values.update(ANTHROPIC_BASE_URL=url, ANTHROPIC_AUTH_TOKEN=token,
+                  ANTHROPIC_API_KEY='', CLAUDE_CODE_OAUTH_TOKEN='',
+                  ANTHROPIC_MODEL=model, ANTHROPIC_DEFAULT_SONNET_MODEL=model,
+                  ANTHROPIC_DEFAULT_OPUS_MODEL=model, ANTHROPIC_DEFAULT_HAIKU_MODEL=model,
+                  ANTHROPIC_SMALL_FAST_MODEL=model, CLAUDE_CODE_USE_BEDROCK='0',
+                  CLAUDE_CODE_USE_VERTEX='0', CLAUDE_CODE_USE_FOUNDRY='0',
+                  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
+                  CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='1')
+    return {'env': values, 'model': model}
+
+
+def request(url, token, payload=None, timeout=60):
+    headers = {'Authorization': 'Bearer ' + token, 'anthropic-version': '2023-06-01'}
+    data = None
+    if payload is not None:
+        headers['Content-Type'] = 'application/json'
+        data = json.dumps(payload).encode()
+    # Loopback must not be forwarded through system HTTP proxies.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(urllib.request.Request(url, data=data, headers=headers), timeout=timeout)
+
+
+def wait_ready(process, url, token, timeout=90):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise StartupError('LiteLLM encerrou antes de iniciar. Verifique a instalacao litellm[proxy].')
+        try:
+            with request(url + '/v1/models', token, timeout=2) as response:
+                if response.status == 200:
+                    return
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.3)
+    raise StartupError('LiteLLM nao ficou pronto em 90 segundos.')
+
+
+def verify_bridge(url, token, model):
+    payload = {'model': model, 'max_tokens': 64,
+               'messages': [{'role': 'user', 'content': 'Responda somente: PONTE OK'}]}
+    try:
+        with request(url + '/v1/messages', token, payload) as response:
+            data = json.load(response)
+        text = ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+        if 'PONTE OK' not in text:
+            raise StartupError('A ponte respondeu, mas nao confirmou PONTE OK.')
+        payload['stream'] = True
+        with request(url + '/v1/messages', token, payload) as response:
+            stream = response.read(1_000_000).decode('utf-8')
+        if 'event: message_start' not in stream or 'event: message_stop' not in stream or 'event: error' in stream:
+            raise StartupError('O teste de streaming Anthropic nao foi concluido.')
+    except urllib.error.HTTPError as error:
+        raise StartupError(f'Ponte recusou o teste (HTTP {error.code}). Nenhum corpo de erro ou segredo foi exibido.') from None
+    except (OSError, ValueError, urllib.error.URLError):
+        raise StartupError('Falha de rede ou resposta invalida no teste da ponte.') from None
+
+
+def stop_owned(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check', action='store_true', help='Verifica ambiente sem chamar Gemini ou alterar settings.')
+    parser.add_argument('--test', action='store_true', help='Testa ponte e Claude Code, depois encerra.')
+    parser.add_argument('--model', default=MODEL)
+    args = parser.parse_args(argv)
+    if os.name != 'nt':
+        raise StartupError('Este iniciador e destinado ao Windows. Testes unitarios funcionam em Linux.')
+    if not args.model.startswith('gemini/') or not re.fullmatch(r'[a-zA-Z0-9_./-]+', args.model):
+        raise StartupError('Modelo invalido: informe um identificador gemini/.')
+    for distribution in ('litellm', 'python-dotenv', 'PyYAML'):
+        try:
+            importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            raise StartupError('Dependencia ausente. Instale litellm[proxy] no mesmo Python usado pelo iniciador.') from None
+    if not (ROOT / '.claude/settings.json').is_file():
+        raise StartupError('Execute dentro do projeto completo: .claude/settings.json ausente.')
+    bash = find_bash(os.environ)
+    env = child_environment(os.environ, bash)
+    node = shutil.which('node', path=env['PATH'])
+    claude = shutil.which('claude', path=env['PATH'])
+    litellm = shutil.which('litellm', path=env['PATH'])
+    if not all((node, claude, litellm)):
+        raise StartupError('Node.js, Claude Code ou executavel LiteLLM nao encontrado no PATH.')
+    # Read the local credential into memory only; never send it to Claude Code.
+    key = load_provider_key(ROOT)
+    print('OK: Python, Node.js, Claude Code, LiteLLM, Git Bash e chave local presentes.')
+    if args.check:
+        print('Diagnostico concluido. Nenhuma chamada Gemini ou alteracao de settings.')
+        return 0
+    missing_core = [p for p in ('mega-brain-core/core/synapse/runtime/hook-runtime.js',
+                                  'mega-brain-core/hooks/unified/runners/precompact-runner.js')
+                    if not (ROOT / p).is_file()]
+    if missing_core:
+        print('AVISO: modulo mega-brain-core incompleto; Synapse/PreCompact nao podem ser validados.')
+    count = repair_hooks(ROOT)
+    print(f'Hooks preparados; {count} comandos atualizados com backup dos originais.')
+    port = select_port()
+    url = f'http://127.0.0.1:{port}'
+    token = 'sk-' + secrets.token_urlsafe(32)
+    proxy_env = dict(env)
+    # Avoid inheriting an unrelated proxy database or logging integration.
+    for name in ('DATABASE_URL', 'DIRECT_URL', 'LITELLM_MASTER_KEY', 'LITELLM_CONFIG',
+                 'LITELLM_LOG', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
+        proxy_env.pop(name, None)
+    for name in KEY_NAMES:
+        proxy_env.pop(name, None)
+    proxy_env.update(GEMINI_API_KEY=key, MEGA_BRAIN_GATEWAY_TOKEN=token,
+                     LITELLM_TELEMETRY='False', LITELLM_LOG='ERROR')
+    client_env = dict(env)
+    for name in (*KEY_NAMES, 'LITELLM_MASTER_KEY', 'MEGA_BRAIN_GATEWAY_TOKEN'):
+        client_env.pop(name, None)
+    overlay = client_settings(url, args.model, token, env)
+    client_env.update(overlay['env'])
+    runtime = ROOT / '.data/mega-brain/runtime'
+    runtime.mkdir(parents=True, exist_ok=True)
+    process = None
+    # Random gateway token (NOT Gemini key) lives in temporary CLI settings only.
+    # TemporaryDirectory removes it after exit; ignored .data keeps it out of git.
+    with tempfile.TemporaryDirectory(dir=runtime) as temporary:
+        directory = Path(temporary)
+        config = directory / 'proxy.yaml'
+        settings = directory / 'session.json'
+        import yaml
+        config.write_text(yaml.safe_dump(proxy_config(args.model)), encoding='utf-8')
+        settings.write_text(json.dumps(overlay), encoding='utf-8')
+        try:
+            process = subprocess.Popen([litellm, '--config', str(config), '--host', '127.0.0.1', '--port', str(port)],
+                                       cwd=ROOT, env=proxy_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f'Iniciando ponte local na porta {port}...')
+            wait_ready(process, url, token)
+            verify_bridge(url, token, args.model)
+            print('PONTE OK: autenticacao, Messages API e streaming verificados.')
+            command = [claude, '--settings', str(settings), '--model', args.model]
+            if args.test:
+                # All project hooks stay active. Do not print captured response/error bodies.
+                result = subprocess.run(command + ['-p', 'Responda somente: MEGA CEREBRO OK', '--max-turns', '1'],
+                                        cwd=ROOT, env=client_env, capture_output=True, timeout=180)
+                output = result.stdout.decode('utf-8', errors='replace')
+                hook_errors = re.search(r'hook error|hook failed|MODULE_NOT_FOUND|Traceback',
+                                        output + result.stderr.decode('utf-8', errors='replace'), re.I)
+                if result.returncode or 'MEGA CEREBRO OK' not in output or hook_errors:
+                    raise StartupError('Teste do Claude Code nao confirmou sucesso. A ponte passou; revise autenticacao/configuracao do Claude.')
+                if missing_core:
+                    raise StartupError('Claude respondeu pela ponte, mas faltam modulos mega-brain-core. Validacao completa pendente.')
+                print('MEGA CEREBRO OK: Claude Code respondeu pela ponte.')
+                return 0
+            print('Abrindo Mega Cerebro. Ao sair do Claude, esta ponte sera encerrada.')
+            return subprocess.call(command, cwd=ROOT, env=client_env)
+        finally:
+            stop_owned(process)
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print('\nEncerrado.')
+        sys.exit(130)
+    except StartupError as error:
+        print('ERRO: ' + str(error), file=sys.stderr)
+        sys.exit(1)
+    except Exception:
+        # Exception messages from dependencies can contain credentials. Never echo them.
+        print('ERRO: inicializacao interrompida. Nenhum detalhe sensivel foi exibido.', file=sys.stderr)
+        sys.exit(1)
