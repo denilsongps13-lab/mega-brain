@@ -13,6 +13,8 @@ FILES = [
     'mega-brain-core/package.json',
     'mega-brain-core/core/synapse/runtime/hook-runtime.js',
     'mega-brain-core/hooks/unified/runners/precompact-runner.js',
+    'system/REGISTRY/INSIGHTS-STATE.json',
+    'system/REGISTRY/BATCH-HISTORY.json',
 ]
 INSTALL = r'''
 import base64, hashlib, json, os, pathlib, secrets, subprocess, sys, tempfile
