@@ -30,6 +30,20 @@ class Fixture(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    @unittest.skipUnless(os.name == 'nt', 'requires Windows cmd.exe')
+    def test_windows_batch_bootstrap_under_path_with_spaces_and_ampersand(self):
+        import base64
+        import zipfile
+        with zipfile.ZipFile(REPO / 'windows/INSTALAR_MEGA_CEREBRO.zip') as archive:
+            data = archive.read('INSTALAR_MEGA_CEREBRO.cmd').replace(b'\r\n', b'\n')
+        scaffold = data.rsplit(b'\nREM MEGA_PAYLOAD\n', 1)[0]
+        body = base64.b64encode(b"print('INSTALLER_BOOTSTRAP_OK')")
+        script = self.root / 'installer.cmd'
+        script.write_bytes((scaffold + b'\nREM MEGA_PAYLOAD\n' + body + b'\n').replace(b'\n', b'\r\n'))
+        result = subprocess.run(['cmd.exe', '/d', '/c', str(script)], capture_output=True, timeout=30)
+        self.assertEqual(0, result.returncode)
+        self.assertIn(b'INSTALLER_BOOTSTRAP_OK', result.stdout)
+
     def test_offline_installer_preserves_settings_env_and_backs_up_files(self):
         import base64
         import zipfile
@@ -122,7 +136,6 @@ class Fixture(unittest.TestCase):
         self.assertEqual('deny', json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'])
 
     def test_key_alias_loaded_without_interpolation_or_file_change(self):
-        from dotenv import dotenv_values
         for name in launcher.KEY_NAMES:
             raw = f'{name}="dummy-${{NOT_EXPANDED}}"\n'
             path = self.root / '.env'
