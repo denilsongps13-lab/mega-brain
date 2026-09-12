@@ -6,8 +6,14 @@ from pathlib import Path
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ['INICIAR_MEGA_CEREBRO.cmd', 'TESTAR_MEGA_CEREBRO.cmd',
-         'scripts/start_mega_brain.py', '.claude/hooks/run-hook.cjs']
+FILES = [
+    'INICIAR_MEGA_CEREBRO.cmd',
+    'TESTAR_MEGA_CEREBRO.cmd',
+    'scripts/start_mega_brain.py',
+    '.claude/hooks/run-hook.cjs',
+    'mega-brain-core/core/synapse/runtime/hook-runtime.js',
+    'mega-brain-core/hooks/unified/runners/precompact-runner.js',
+]
 INSTALL = r'''
 import base64, hashlib, json, os, pathlib, secrets, shutil, subprocess, sys, tempfile
 from datetime import datetime, timezone
@@ -23,8 +29,7 @@ def install():
     if target is None:
         import tkinter as tk
         from tkinter import filedialog
-        ui = tk.Tk()
-        ui.withdraw()
+        ui = tk.Tk(); ui.withdraw()
         directory = filedialog.askdirectory(title='Selecione a pasta do Mega Cerebro que contem .claude')
         ui.destroy()
         if not directory:
@@ -43,7 +48,6 @@ def install():
     backup = target/'.data/mega-brain/installer-backups'/stamp
     backup.mkdir(parents=True)
     previous = {}
-    # Save all existing destinations before any replacement. Never touch .env/settings.
     for relative in decoded:
         dest = target/relative
         previous[relative] = dest.read_bytes() if dest.exists() else None
@@ -51,8 +55,7 @@ def install():
             saved = backup/relative
             saved.parent.mkdir(parents=True, exist_ok=True)
             saved.write_bytes(previous[relative])
-    (backup/'manifest.json').write_text(json.dumps({'replaced':[p for p,v in previous.items() if v is not None],
-                                                   'created':[p for p,v in previous.items() if v is None]}, indent=2))
+    (backup/'manifest.json').write_text(json.dumps({'replaced':[p for p,v in previous.items() if v is not None], 'created':[p for p,v in previous.items() if v is None]}, indent=2))
     for relative, data in decoded.items():
         dest = target/relative
         current = dest.read_bytes() if dest.exists() else None
@@ -61,8 +64,7 @@ def install():
         dest.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=dest.parent, suffix='.tmp')
         try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data)
+            with os.fdopen(fd, 'wb') as stream: stream.write(data)
             os.replace(temporary, dest)
         finally:
             if os.path.exists(temporary): os.unlink(temporary)
@@ -75,7 +77,6 @@ except Exception:
     print('Instalacao interrompida. Nenhuma chave foi exibida. Consulte o backup antes de repetir.')
     sys.exit(1)
 '''
-
 
 def build():
     payload = {}
@@ -91,13 +92,11 @@ def build():
     cmd = '@echo off\nsetlocal\nset "MEGA_INSTALLER=%~f0"\nwhere py >nul 2>nul\nif not errorlevel 1 (\n  py -3 -c "' + bootstrap + '"\n) else (\n  python -c "' + bootstrap + '"\n)\nset "MEGA_RESULT=%ERRORLEVEL%"\nif not "%MEGA_RESULT%"=="0" pause\nexit /b %MEGA_RESULT%\nREM MEGA_PAYLOAD\n' + body + '\n'
     out = ROOT / 'windows/INSTALAR_MEGA_CEREBRO.zip'
     out.parent.mkdir(exist_ok=True)
-    # Fixed entry timestamp makes rebuilds reproducible.
     with zipfile.ZipFile(out, 'w') as archive:
         info = zipfile.ZipInfo('INSTALAR_MEGA_CEREBRO.cmd', (2026, 9, 12, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
         archive.writestr(info, cmd.replace('\n', '\r\n').encode('ascii'))
     return out
-
 
 if __name__ == '__main__':
     print(build().relative_to(ROOT))
