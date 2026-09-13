@@ -183,10 +183,13 @@ def proxy_config(model):
                 'model': model, 'api_key': 'os.environ/GEMINI_API_KEY', 'max_retries': 0}},
             {'model_name': 'mega-brain-groq-fallback', 'litellm_params': {
                 'model': FALLBACK_MODEL, 'api_base': 'https://api.groq.com/openai/v1',
-                'api_key': 'os.environ/GROQ_API_KEY', 'max_retries': 0}},
+                'api_key': 'os.environ/GROQ_API_KEY', 'max_retries': 0,
+                # Keep Groq's full model ID after LiteLLM strips its routing prefix.
+                'extra_body': {'model': FALLBACK_MODEL}}},
         ],
         'router_settings': {
             'routing_strategy': 'simple-shuffle',
+            'disable_cooldowns': True,
             'num_retries': 0,
             'max_fallbacks': 1,
             'timeout': 60,

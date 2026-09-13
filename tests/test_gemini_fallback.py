@@ -35,6 +35,8 @@ def bridge(tmp_path, monkeypatch):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             provider = 'gemini' if '/models/gemini-' in self.path else 'groq'
             state[provider] += 1
+            if provider == 'groq':
+                assert body['model'] == 'openai/gpt-oss-120b', body['model']
             state['bodies'].append((provider, body))
             status = state['status'] if provider == 'gemini' else state['groq_status']
             self.send_response(status)
@@ -110,11 +112,14 @@ def test_provider_failure_falls_back_once_and_primary_recovers(bridge, status):
     router, state = bridge
     state['status'] = status
     async def scenario():
-        assert 'GROQ OK' in response_text(await ask(router))
-        state['status'] = 200
-        assert 'GEMINI OK' in response_text(await ask(router))
+        for _ in range(6):
+            state['status'] = status
+            assert 'GROQ OK' in response_text(await ask(router))
+            await asyncio.sleep(.05)  # let async failure logging finish; no cooldown expiry
+            state['status'] = 200
+            assert 'GEMINI OK' in response_text(await ask(router))
     asyncio.run(scenario())
-    assert (state['gemini'], state['groq']) == (2, 1)
+    assert (state['gemini'], state['groq']) == (12, 6)
 
 
 def test_no_local_sixth_request_throttle(bridge):

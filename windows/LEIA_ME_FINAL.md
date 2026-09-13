@@ -19,23 +19,23 @@ A autenticação Claude → LiteLLM usa um token local aleatório por sessão.
 
 Gemini `gemini/gemini-3.6-flash` permanece principal. Em limite local, HTTP 429,
 timeout ou indisponibilidade, a requisição segue para Groq
-`llama-3.3-70b-versatile`. Usa a API oficial Groq compatível com OpenAI
+`openai/gpt-oss-120b`. Usa a API oficial Groq compatível com OpenAI
 (`https://api.groq.com/openai/v1`); não usa a API nem credenciais da OpenAI.
 Essa via evita a falha de `service_tier` opcional do adaptador Groq no LiteLLM
 1.100.1. Referência: https://console.groq.com/docs/openai
 
-O controle local reserva no máximo cinco tentativas Gemini em qualquer janela
-móvel de 60 segundos, inclusive falhas. SQLite coordena chamadas simultâneas e
-reinícios nesta pasta; não grava prompts, respostas ou segredos. Uso do mesmo
-projeto Gemini por outros aplicativos continua sujeito à cota do provedor.
-Ao falhar, o Router coloca o Gemini em cooldown de 61 segundos (ou maior quando
-indicado pelo provedor); após isso, novas requisições voltam a preferi-lo.
+Não há limitador local de RPM nem cooldown artificial. Gemini é tentado primeiro
+em cada nova requisição. HTTP 429/503 ou indisponibilidade acionam Groq na mesma
+requisição. Quando Gemini volta a responder, ele já é usado na próxima chamada.
+A sexta chamada não é bloqueada localmente; as cotas são aplicadas pelos provedores.
+O módulo legado de limite permanece disponível para compatibilidade, mas não é
+carregado pelo launcher. O Router também tem seu cooldown padrão desativado.
 Retries estão desativados e há somente um destino de fallback. Se ambos falham,
 a requisição termina com erro. Não há sondagens periódicas nem inferência na
 inicialização. Streaming que já entregou conteúdo não é reiniciado em outro
 provedor: isso evita duplicação de texto e ferramentas.
 
-O fallback tem contexto/capacidades próprios (Llama é textual); não há corte
+O fallback tem contexto/capacidades próprios ; não há corte
 silencioso de histórico para forçar uma chamada incompatível. O fallback não
 transforma o limite de uma conta Groq em capacidade ilimitada.
 

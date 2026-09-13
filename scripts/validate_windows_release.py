@@ -43,9 +43,29 @@ def validate():
     assert isinstance(history.get('batches'), list) and not history['batches']
     # Health scorer and process-jarvis contract: list entries, no fabricated runs.
     config = launcher.proxy_config(launcher.MODEL)
-    assert config['router_settings']['fallbacks'] == [{launcher.MODEL: ['mega-brain-groq-fallback']}]
-    assert config['model_list'][0]['litellm_params']['rpm'] == 5
-    assert config['router_settings']['num_retries'] == 0
+    router = config['router_settings']
+    assert router['fallbacks'] == [{launcher.MODEL: ['mega-brain-groq-fallback']}]
+    assert router['max_fallbacks'] == 1
+    assert router['num_retries'] == 0
+    assert 'cooldown_time' not in router
+    assert 'enable_pre_call_checks' not in router
+    assert router.get('disable_cooldowns') is True
+    assert config['litellm_settings']['num_retries'] == 0
+    assert all('mega_brain_rate_limit.limiter' not in str(c)
+               for c in config['litellm_settings'].get('callbacks', []))
+    assert len(config['model_list']) == 2
+    for deployment in config['model_list']:
+        assert 'rpm' not in deployment
+        assert 'rpm' not in deployment.get('model_info', {})
+        assert 'rpm' not in deployment['litellm_params']
+        assert deployment['litellm_params']['max_retries'] == 0
+    primary, fallback = config['model_list']
+    assert primary['model_name'] == primary['litellm_params']['model'] == 'gemini/gemini-3.6-flash'
+    assert fallback['model_name'] == 'mega-brain-groq-fallback'
+    assert fallback['litellm_params']['model'] == 'openai/gpt-oss-120b'
+    assert fallback['litellm_params']['api_base'] == 'https://api.groq.com/openai/v1'
+    assert fallback['litellm_params']['api_key'] == 'os.environ/GROQ_API_KEY'
+    assert fallback['litellm_params']['extra_body']['model'] == 'openai/gpt-oss-120b'
     with zipfile.ZipFile(ROOT / 'windows/INSTALAR_MEGA_CEREBRO_FINAL.zip') as archive:
         assert archive.namelist() == ['INSTALAR_MEGA_CEREBRO.cmd']
         command = archive.read('INSTALAR_MEGA_CEREBRO.cmd').replace(b'\r\n', b'\n')

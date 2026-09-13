@@ -6,7 +6,7 @@ com backup e preservação do `.env` e estados locais. Depois use
 `INICIAR_MEGA_CEREBRO.cmd` na pasta do projeto.
 
 A documentação completa está em [LEIA_ME_FINAL](../windows/LEIA_ME_FINAL.md),
-incluindo Gemini principal, Groq de fallback, limite de 5 RPM, requisitos,
+incluindo Gemini principal, Groq de fallback, failover definido pelos provedores, requisitos,
 backups e alcance dos testes. A inicialização normal não faz inferência de teste.
 `TESTAR_MEGA_CEREBRO.cmd` solicita apenas uma resposta curta pelo Claude.
 
