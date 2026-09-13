@@ -1,10 +1,11 @@
-"""Windows entry point with a streaming-safe Gemini fallback workaround.
+"""Windows entry point with pre-stream Gemini fallback hardening.
 
-LiteLLM 1.100.1 can surface Gemini/Vertex 429 only after a stream object has
-already been returned.  In that case Router fallback is too late.  Force the
-Gemini deployment to fake-stream: LiteLLM performs the upstream Gemini request
-non-streaming (so 429/503 is visible to Router), then emits an Anthropic stream
-to Claude Code after success.  Groq remains the one-shot fallback.
+LiteLLM 1.100.1 may surface Gemini/Vertex 429/503 only after a native stream
+has already started. At that point the /v1/messages fallback path is too late.
+Mark only the Gemini deployment as not supporting native streaming so LiteLLM
+performs the provider request before emitting the Anthropic-compatible stream.
+A provider 429/503 can then reach Router's normal one-shot Groq fallback before
+Claude Code receives any stream bytes. Groq remains native-stream capable.
 """
 import importlib.util
 from pathlib import Path
@@ -24,10 +25,11 @@ def harden_streaming_fallback(launcher):
     def proxy_config(model):
         config = original(model)
         primary = next(item for item in config['model_list'] if item['model_name'] == model)
-        # Preserve Claude Code streaming on the client side while making the
-        # Gemini provider call non-streaming. This moves provider 429/503 into
-        # Router's normal fallback path instead of the broken mid-stream path.
-        primary['litellm_params']['fake_stream'] = True
+        # This is LiteLLM's model-capability switch for choosing fake/non-native
+        # streaming. Unlike passing an ad-hoc fake_stream request parameter, the
+        # proxy consults model_info when deciding whether to open an upstream
+        # streaming generator.
+        primary.setdefault('model_info', {})['supports_native_streaming'] = False
         return config
 
     launcher.proxy_config = proxy_config
