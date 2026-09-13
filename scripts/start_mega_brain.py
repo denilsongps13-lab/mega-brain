@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'gemini/gemini-3.6-flash'
 # Groq's official OpenAI endpoint avoids LiteLLM 1.100.1's optional service_tier bug.
-FALLBACK_MODEL = 'openai/llama-3.3-70b-versatile'
+FALLBACK_MODEL = 'openai/gpt-oss-120b
 KEY_NAMES = ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY')
 
 
