@@ -1,6 +1,6 @@
 # Claude Code Agent Registry
 # Source: agents/persona-registry.yaml
-# Version: 1.0.0
+# Version: 1.1.0
 
 source: "agents/persona-registry.yaml"
 sync_targets:
@@ -15,12 +15,14 @@ paths:
   L3: "agents/external/"
   L4: "agents/cargo/"
   SUB: ".claude/jarvis/sub-agents/"
+  EXECUTOR: "agents/system/executor/"
 
 # Activation
 activation:
   # L0 - System
   jarvis: "@jarvis"
   agent-creator: "/create-agent"
+  executor: "/execute"
 
   # L1 - Conclave
   conclave: "/conclave"
