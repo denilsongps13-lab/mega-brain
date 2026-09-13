@@ -85,6 +85,7 @@ def build():
     out = ROOT / 'windows/INSTALAR_MEGA_CEREBRO_FINAL.zip'; out.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(out, 'w') as archive:
         info = zipfile.ZipInfo('INSTALAR_MEGA_CEREBRO.cmd', (2026, 9, 12, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 0
         archive.writestr(info, cmd.replace('\n', '\r\n').encode('ascii'))
     return out
 if __name__ == '__main__': print(build().relative_to(ROOT))
