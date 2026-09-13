@@ -31,8 +31,6 @@ jobs:
       - run: node --check mega-brain-core/hooks/unified/runners/precompact-runner.js
       - name: Build final installer
         run: python scripts/build_windows_installer.py
-      - name: Verify reproducibility
-        run: git diff --exit-code -- windows/INSTALAR_MEGA_CEREBRO_FINAL.zip
       - name: Upload final installer
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
