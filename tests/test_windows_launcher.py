@@ -34,7 +34,7 @@ class Fixture(unittest.TestCase):
     def test_windows_batch_bootstrap_under_path_with_spaces_and_ampersand(self):
         import base64
         import zipfile
-        with zipfile.ZipFile(REPO / 'windows/INSTALAR_MEGA_CEREBRO.zip') as archive:
+        with zipfile.ZipFile(REPO / 'windows/INSTALAR_MEGA_CEREBRO_FINAL.zip') as archive:
             data = archive.read('INSTALAR_MEGA_CEREBRO.cmd').replace(b'\r\n', b'\n')
         scaffold = data.rsplit(b'\nREM MEGA_PAYLOAD\n', 1)[0]
         body = base64.b64encode(b"print('INSTALLER_BOOTSTRAP_OK')")
@@ -50,8 +50,11 @@ class Fixture(unittest.TestCase):
         (self.root / '.claude/settings.json').write_bytes(b'{"hooks":{}}')
         (self.root / '.env').write_bytes(b'LOCAL_SECRET_PLACEHOLDER=unchanged')
         (self.root / 'INICIAR_MEGA_CEREBRO.cmd').write_bytes(b'original launcher')
+        (self.root / 'system/REGISTRY').mkdir(parents=True)
+        history = b'{"batches":[{"id":"existing"}],"custom":true}'
+        (self.root / 'system/REGISTRY/BATCH-HISTORY.json').write_bytes(history)
         original_runner = (self.root / '.claude/hooks/run-hook.cjs').read_bytes()
-        with zipfile.ZipFile(REPO / 'windows/INSTALAR_MEGA_CEREBRO.zip') as archive:
+        with zipfile.ZipFile(REPO / 'windows/INSTALAR_MEGA_CEREBRO_FINAL.zip') as archive:
             cmd = archive.read('INSTALAR_MEGA_CEREBRO.cmd').replace(b'\r\n', b'\n')
         source = base64.b64decode(cmd.rsplit(b'\nREM MEGA_PAYLOAD\n', 1)[1])
         with patch.dict(os.environ, {'MEGA_INSTALLER': str(self.root / 'installer.cmd')}):
@@ -61,6 +64,7 @@ class Fixture(unittest.TestCase):
         self.assertEqual(0, result.exception.code)
         self.assertEqual(b'{"hooks":{}}', (self.root / '.claude/settings.json').read_bytes())
         self.assertEqual(b'LOCAL_SECRET_PLACEHOLDER=unchanged', (self.root / '.env').read_bytes())
+        self.assertEqual(history, (self.root / 'system/REGISTRY/BATCH-HISTORY.json').read_bytes())
         backup = next((self.root / '.data/mega-brain/installer-backups').iterdir())
         self.assertEqual(b'original launcher', (backup / 'INICIAR_MEGA_CEREBRO.cmd').read_bytes())
         self.assertEqual(original_runner, (backup / '.claude/hooks/run-hook.cjs').read_bytes())

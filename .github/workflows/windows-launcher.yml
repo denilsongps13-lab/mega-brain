@@ -1,21 +1,15 @@
 name: Windows Gemini launcher
 on:
+  push:
+    branches: [fix/windows-gemini-launcher]
   pull_request:
-    paths:
-      - 'scripts/start_mega_brain.py'
-      - 'scripts/build_windows_installer.py'
-      - 'INICIAR_MEGA_CEREBRO.cmd'
-      - 'TESTAR_MEGA_CEREBRO.cmd'
-      - '.claude/hooks/run-hook.cjs'
-      - 'mega-brain-core/**'
-      - 'tests/test_windows_launcher.py'
-      - '.github/workflows/windows-launcher.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   launcher:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
@@ -27,40 +21,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: python -m pip install python-dotenv PyYAML
-      - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - run: python -m pip install -r windows/requirements-test.txt
+      - name: Check committed installer against sources
+        run: python scripts/validate_windows_release.py
+      - name: Native launcher, real LiteLLM and synthetic upstream tests
+        run: python -m pytest tests/ -v --tb=short
       - run: node --check .claude/hooks/run-hook.cjs
       - run: node --check mega-brain-core/core/synapse/runtime/hook-runtime.js
       - run: node --check mega-brain-core/hooks/unified/runners/precompact-runner.js
       - name: Build final installer
         run: python scripts/build_windows_installer.py
-      - name: Validate installer contents
-        shell: python
-        run: |
-          import base64, json, zipfile
-          from pathlib import Path
-          z = Path('windows/INSTALAR_MEGA_CEREBRO.zip')
-          assert z.is_file() and z.stat().st_size > 0
-          with zipfile.ZipFile(z) as a:
-              assert a.namelist() == ['INSTALAR_MEGA_CEREBRO.cmd']
-              cmd = a.read('INSTALAR_MEGA_CEREBRO.cmd').replace(b'\r\n', b'\n')
-          payload = cmd.rsplit(b'\nREM MEGA_PAYLOAD\n', 1)[1].strip()
-          source = base64.b64decode(payload).decode()
-          encoded = source.split("PAYLOAD = '", 1)[1].split("'", 1)[0]
-          files = json.loads(base64.b64decode(encoded))
-          required = {
-              'INICIAR_MEGA_CEREBRO.cmd',
-              'TESTAR_MEGA_CEREBRO.cmd',
-              'scripts/start_mega_brain.py',
-              '.claude/hooks/run-hook.cjs',
-              'mega-brain-core/core/synapse/runtime/hook-runtime.js',
-              'mega-brain-core/hooks/unified/runners/precompact-runner.js',
-          }
-          assert required.issubset(files), required - set(files)
+      - name: Verify reproducibility
+        run: git diff --exit-code -- windows/INSTALAR_MEGA_CEREBRO_FINAL.zip
       - name: Upload final installer
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: INSTALAR_MEGA_CEREBRO
-          path: windows/INSTALAR_MEGA_CEREBRO.zip
+          name: INSTALAR_MEGA_CEREBRO_FINAL
+          path: windows/INSTALAR_MEGA_CEREBRO_FINAL.zip
           if-no-files-found: error

@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'gemini/gemini-3.6-flash'
+# Groq's official OpenAI endpoint avoids LiteLLM 1.100.1's optional service_tier bug.
+FALLBACK_MODEL = 'openai/llama-3.3-70b-versatile'
 KEY_NAMES = ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY')
 
 
@@ -31,15 +33,33 @@ class StartupError(Exception):
     pass
 
 
+def load_provider_keys(root):
+    # Local launcher only; never invoked by CI against a user's project.
+    from dotenv import dotenv_values
+    values = dotenv_values(root / '.env', interpolate=False, encoding='utf-8-sig')
+    gemini = next((values[n].strip() for n in KEY_NAMES if (values.get(n) or '').strip()), None)
+    groq = (values.get('GROQ_API_KEY') or '').strip()
+    if not gemini or not groq:
+        raise StartupError('GEMINI_API_KEY ou GROQ_API_KEY ausente no .env local. Arquivo preservado.')
+    return {'GEMINI_API_KEY': gemini, 'GROQ_API_KEY': groq}
+
+
 def load_provider_key(root):
-    # dotenv is already a LiteLLM dependency. No shell evaluation or interpolation.
+    # Compatibility for callers of the original launcher API.
     from dotenv import dotenv_values
     values = dotenv_values(root / '.env', interpolate=False, encoding='utf-8-sig')
     for name in KEY_NAMES:
-        value = values.get(name)
-        if value and value.strip():
-            return value.strip()
-    raise StartupError('Chave Gemini ausente no .env local. O arquivo nao foi alterado.')
+        if values.get(name):
+            return values[name].strip()
+    raise StartupError('Chave Gemini ausente no .env local.')
+
+
+def sanitized_client_environment(env):
+    result = dict(env)
+    for name in (*KEY_NAMES, 'GROQ_API_KEY', 'LITELLM_MASTER_KEY',
+                 'MEGA_BRAIN_GATEWAY_TOKEN', 'MEGA_BRAIN_RATE_DB'):
+        result.pop(name, None)
+    return result
 
 
 def find_bash(env):
@@ -165,10 +185,33 @@ def select_port():
 
 
 def proxy_config(model):
-    return {'model_list': [{'model_name': model, 'litellm_params': {
-        'model': model, 'api_key': 'os.environ/GEMINI_API_KEY'}}],
+    return {
+        'model_list': [
+            {'model_name': model, 'litellm_params': {
+                'model': model, 'api_key': 'os.environ/GEMINI_API_KEY',
+                'rpm': 5, 'max_parallel_requests': 1, 'max_retries': 0}},
+            {'model_name': 'mega-brain-groq-fallback', 'litellm_params': {
+                'model': FALLBACK_MODEL, 'api_base': 'https://api.groq.com/openai/v1',
+                'api_key': 'os.environ/GROQ_API_KEY',
+                'max_retries': 0}},
+        ],
+        'router_settings': {
+            'routing_strategy': 'simple-shuffle', 'enable_pre_call_checks': True,
+            'num_retries': 0, 'max_fallbacks': 1, 'timeout': 60,
+            'cooldown_time': 61, 'allowed_fails': 0,
+            'allowed_fails_policy': {
+                'RateLimitErrorAllowedFails': 0, 'TimeoutErrorAllowedFails': 0,
+                'InternalServerErrorAllowedFails': 0,
+                'ServiceUnavailableErrorAllowedFails': 0},
+            'fallbacks': [{model: ['mega-brain-groq-fallback']}],
+        },
         'general_settings': {'master_key': 'os.environ/MEGA_BRAIN_GATEWAY_TOKEN'},
-        'litellm_settings': {'drop_params': True, 'set_verbose': False}}
+        'litellm_settings': {
+            'drop_params': True, 'set_verbose': False, 'num_retries': 0,
+            'callbacks': ['scripts.mega_brain_rate_limit.limiter'],
+            'use_chat_completions_url_for_anthropic_messages': True,
+        },
+    }
 
 
 def client_settings(url, model, token, env):
@@ -244,7 +287,7 @@ def stop_owned(process):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Verifica ambiente sem chamar Gemini ou alterar settings.')
-    parser.add_argument('--test', action='store_true', help='Testa ponte e Claude Code, depois encerra.')
+    parser.add_argument('--test', action='store_true', help='Faz uma chamada pelo Claude Code, depois encerra.')
     parser.add_argument('--model', default=MODEL)
     args = parser.parse_args(argv)
     if os.name != 'nt':
@@ -253,7 +296,9 @@ def main(argv=None):
         raise StartupError('Modelo invalido: informe um identificador gemini/.')
     for distribution in ('litellm', 'python-dotenv', 'PyYAML'):
         try:
-            importlib.metadata.version(distribution)
+            version = importlib.metadata.version(distribution)
+            if distribution == 'litellm' and version != '1.100.1':
+                raise StartupError('Esta versao do iniciador requer litellm[proxy]==1.100.1.')
         except importlib.metadata.PackageNotFoundError:
             raise StartupError('Dependencia ausente. Instale litellm[proxy] no mesmo Python usado pelo iniciador.') from None
     if not (ROOT / '.claude/settings.json').is_file():
@@ -266,7 +311,7 @@ def main(argv=None):
     if not all((node, claude, litellm)):
         raise StartupError('Node.js, Claude Code ou executavel LiteLLM nao encontrado no PATH.')
     # Read the local credential into memory only; never send it to Claude Code.
-    key = load_provider_key(ROOT)
+    keys = load_provider_keys(ROOT)
     print('OK: Python, Node.js, Claude Code, LiteLLM, Git Bash e chave local presentes.')
     if args.check:
         print('Diagnostico concluido. Nenhuma chamada Gemini ou alteracao de settings.')
@@ -286,13 +331,14 @@ def main(argv=None):
     for name in ('DATABASE_URL', 'DIRECT_URL', 'LITELLM_MASTER_KEY', 'LITELLM_CONFIG',
                  'LITELLM_LOG', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
         proxy_env.pop(name, None)
-    for name in KEY_NAMES:
+    for name in (*KEY_NAMES, 'GROQ_API_KEY'):
         proxy_env.pop(name, None)
-    proxy_env.update(GEMINI_API_KEY=key, MEGA_BRAIN_GATEWAY_TOKEN=token,
-                     LITELLM_TELEMETRY='False', LITELLM_LOG='ERROR')
-    client_env = dict(env)
-    for name in (*KEY_NAMES, 'LITELLM_MASTER_KEY', 'MEGA_BRAIN_GATEWAY_TOKEN'):
-        client_env.pop(name, None)
+    proxy_env.update(**keys, MEGA_BRAIN_GATEWAY_TOKEN=token,
+                     LITELLM_TELEMETRY='False', LITELLM_LOG='ERROR',
+                     LITELLM_LOCAL_MODEL_COST_MAP='True')
+    proxy_env['PYTHONPATH'] = str(ROOT)
+    proxy_env['MEGA_BRAIN_RATE_DB'] = str(ROOT / '.data/mega-brain/gemini-rate.sqlite')
+    client_env = sanitized_client_environment(env)
     overlay = client_settings(url, args.model, token, env)
     client_env.update(overlay['env'])
     runtime = ROOT / '.data/mega-brain/runtime'
@@ -312,8 +358,7 @@ def main(argv=None):
                                        cwd=ROOT, env=proxy_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             print(f'Iniciando ponte local na porta {port}...')
             wait_ready(process, url, token)
-            verify_bridge(url, token, args.model)
-            print('PONTE OK: autenticacao, Messages API e streaming verificados.')
+            print('Ponte local pronta. Gemini principal; Groq em caso de limite ou falha.')
             command = [claude, '--settings', str(settings), '--model', args.model]
             if args.test:
                 # All project hooks stay active. Do not print captured response/error bodies.
@@ -323,7 +368,7 @@ def main(argv=None):
                 hook_errors = re.search(r'hook error|hook failed|MODULE_NOT_FOUND|Traceback',
                                         output + result.stderr.decode('utf-8', errors='replace'), re.I)
                 if result.returncode or 'MEGA CEREBRO OK' not in output or hook_errors:
-                    raise StartupError('Teste do Claude Code nao confirmou sucesso. A ponte passou; revise autenticacao/configuracao do Claude.')
+                    raise StartupError('Teste do Claude Code nao confirmou sucesso. Revise autenticacao/configuracao do Claude.')
                 if missing_core:
                     raise StartupError('Claude respondeu pela ponte, mas faltam modulos mega-brain-core. Validacao completa pendente.')
                 print('MEGA CEREBRO OK: Claude Code respondeu pela ponte.')

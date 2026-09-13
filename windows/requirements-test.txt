@@ -1,0 +1,4 @@
+litellm[proxy]==1.100.1
+pytest>=8,<10
+pytest-cov>=6,<8
+jsonschema>=4.23,<5

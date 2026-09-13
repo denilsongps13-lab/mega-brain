@@ -9,10 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     'INICIAR_MEGA_CEREBRO.cmd', 'TESTAR_MEGA_CEREBRO.cmd',
     'scripts/start_mega_brain.py', 'scripts/start_mega_brain_v2.py',
+    'scripts/mega_brain_rate_limit.py', 'windows/LEIA_ME_FINAL.md',
     '.claude/hooks/run-hook.cjs',
     'mega-brain-core/package.json',
     'mega-brain-core/core/synapse/runtime/hook-runtime.js',
     'mega-brain-core/hooks/unified/runners/precompact-runner.js',
+    'engine/jarvis/voice/vapi_update_assistant.py',
+    'engine/jarvis/voice/vapi_update_full_ptbr.py',
     'system/REGISTRY/INSIGHTS-STATE.json',
     'system/REGISTRY/BATCH-HISTORY.json',
 ]
@@ -41,6 +44,9 @@ def install():
     for relative, item in payload.items():
         data = base64.b64decode(item['data'])
         if hashlib.sha256(data).hexdigest() != item['sha256']: print('Pacote corrompido. Nenhum arquivo alterado.'); return 1
+        # Registry baselines are create-only: existing knowledge is never replaced.
+        if relative.startswith('system/REGISTRY/') and (target/relative).exists():
+            continue
         decoded[relative] = data
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '-' + secrets.token_hex(4)
     backup = target/'.data/mega-brain/installer-backups'/stamp; backup.mkdir(parents=True)
@@ -76,7 +82,7 @@ def build():
     body = base64.b64encode(source.encode()).decode()
     bootstrap = "import base64,os; p=open(os.environ['MEGA_INSTALLER'],'rb').read().replace(b'\\r\\n',b'\\n'); exec(compile(base64.b64decode(p.rsplit(b'\\nREM MEGA_PAYLOAD\\n',1)[1]),'<mega-installer>','exec'))"
     cmd = '@echo off\nsetlocal\nset "MEGA_INSTALLER=%~f0"\nwhere py >nul 2>nul\nif not errorlevel 1 (\n  py -3 -c "' + bootstrap + '"\n) else (\n  python -c "' + bootstrap + '"\n)\nset "MEGA_RESULT=%ERRORLEVEL%"\nif not "%MEGA_RESULT%"=="0" pause\nexit /b %MEGA_RESULT%\nREM MEGA_PAYLOAD\n' + body + '\n'
-    out = ROOT / 'windows/INSTALAR_MEGA_CEREBRO.zip'; out.parent.mkdir(exist_ok=True)
+    out = ROOT / 'windows/INSTALAR_MEGA_CEREBRO_FINAL.zip'; out.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(out, 'w') as archive:
         info = zipfile.ZipInfo('INSTALAR_MEGA_CEREBRO.cmd', (2026, 9, 12, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
         archive.writestr(info, cmd.replace('\n', '\r\n').encode('ascii'))
