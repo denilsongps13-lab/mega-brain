@@ -80,7 +80,7 @@ TOOLS_CONFIG = [
         "type": "function",
         "function": {
             "name": "source_status",
-            "description": "Retorna o status de uma fonte específica (Jeremy Haynes, Cole Gordon, Alex Hormozi). Use quando perguntarem sobre uma fonte específica."
+            "description": "Retorna o status de uma fonte específica (Jeremy Haynes, Cole Gordon, Alex Hormozi). Use quando perguntarem sobre uma fonte específica.",
             "parameters": {
                 "type": "object",
                 "properties": {
