@@ -1,11 +1,11 @@
-"""Compatibility launcher for real LiteLLM/Gemini responses on Windows."""
+"""Compatibility launcher for Gemini free-tier on Windows.
+Keeps startup quota-free and rate-limits the local gateway to the project's 5 RPM ceiling.
+"""
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
 import sys
-import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / 'scripts' / 'start_mega_brain.py'
@@ -14,41 +14,25 @@ base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 
 
-def verify_bridge_compatible(url, token, model):
-    """Verify auth + Anthropic Messages API without trusting model wording."""
-    payload = {
-        'model': model,
-        'max_tokens': 64,
-        'messages': [{'role': 'user', 'content': 'Responda brevemente para confirmar a conexao.'}],
-    }
-    try:
-        with base.request(url + '/v1/messages', token, payload) as response:
-            if response.status != 200:
-                raise base.StartupError('A ponte local nao confirmou HTTP 200.')
-            data = json.load(response)
-        # LiteLLM versions/providers can vary wording and, in compatibility modes,
-        # response shape. A successful authenticated model response is what matters.
-        content = data.get('content')
-        choices = data.get('choices')
-        if not content and not choices:
-            raise base.StartupError('A ponte respondeu sem conteudo de modelo.')
-
-        payload['stream'] = True
-        with base.request(url + '/v1/messages', token, payload) as response:
-            if response.status != 200:
-                raise base.StartupError('Streaming da ponte nao confirmou HTTP 200.')
-            stream = response.read(1_000_000).decode('utf-8', errors='replace')
-        if not stream.strip() or 'event: error' in stream.lower():
-            raise base.StartupError('O streaming da ponte nao foi concluido.')
-    except urllib.error.HTTPError as error:
-        raise base.StartupError(
-            f'Ponte recusou o teste (HTTP {error.code}). Nenhum corpo de erro ou segredo foi exibido.'
-        ) from None
-    except (OSError, ValueError, urllib.error.URLError):
-        raise base.StartupError('Falha de rede ou resposta invalida no teste da ponte.') from None
+def proxy_config_free_tier(model):
+    config = base.proxy_config(model)
+    params = config['model_list'][0]['litellm_params']
+    # Google AI Studio reports a 5 RPM ceiling for this project. Stay below it
+    # and serialize requests so agent bursts do not immediately trigger HTTP 429.
+    params['rpm'] = 4
+    params['max_parallel_requests'] = 1
+    params['num_retries'] = 2
+    return config
 
 
-base.verify_bridge = verify_bridge_compatible
+def verify_bridge_without_provider_call(url, token, model):
+    # wait_ready() already authenticated against the local LiteLLM /v1/models
+    # endpoint. Do not spend two Gemini requests every time Mega Brain starts.
+    return None
+
+
+base.proxy_config = proxy_config_free_tier
+base.verify_bridge = verify_bridge_without_provider_call
 
 if __name__ == '__main__':
     try:
