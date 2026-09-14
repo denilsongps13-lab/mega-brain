@@ -1,7 +1,7 @@
 name: Windows desktop validation
 on:
   push:
-    branches: [main, fix/desktop-diagnostics]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:

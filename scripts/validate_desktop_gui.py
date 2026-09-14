@@ -32,8 +32,8 @@ with tempfile.TemporaryDirectory() as tmp:
         for state in ('IDLE', 'THINKING', 'PLANNING', 'EXECUTING', 'COMPLETED', 'ERROR'):
             app._brain.set_state(state)
             app._brain.tick()
-            app.root.update()
             assert app._brain.state == state
+            app.root.update()
         for view in ('memory', 'context', 'status', 'settings', 'chat'):
             app._switch_view(view)
             app.root.update()

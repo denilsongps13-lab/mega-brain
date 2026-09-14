@@ -73,6 +73,10 @@ class NeuralBrain:
     def tick(self):
         if self.closed:
             return
+        # Coalesce manual redraws with the scheduled frame: never accumulate timers.
+        if self.after_id is not None:
+            self.canvas.after_cancel(self.after_id)
+            self.after_id = None
         now = time.monotonic()
         if self.state in ('COMPLETED', 'ERROR') and now - self.changed >= 1:
             self.set_state('IDLE')
