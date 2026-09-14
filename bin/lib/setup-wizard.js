@@ -18,6 +18,7 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { resolvePythonCmd } from './python-cmd.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -93,27 +94,24 @@ async function checkPython() {
   const spinner = ora({ text: 'Detecting Python...', indent: 4 }).start();
   await sleep(400);
 
-  let pythonCmd = null;
-  let versionOutput = null;
-
-  for (const cmd of ['python3 --version', 'python --version']) {
-    const result = runCommand(cmd);
-    if (result && result.toLowerCase().includes('python 3')) {
-      pythonCmd = cmd.split(' ')[0];
-      versionOutput = result;
-      break;
-    }
+  const pythonCmd = resolvePythonCmd();
+  if (!pythonCmd) {
+    spinner.fail(chalk.red('Python 3 not found'));
+    console.log(chalk.dim('    Install from: https://python.org/downloads'));
+    console.log(chalk.dim('    Python is needed for hooks and processing scripts.'));
+    return { ok: false, version: null, command: null };
   }
 
-  if (versionOutput) {
-    const version = parseVersion(versionOutput);
-    if (version && version.major >= 3 && version.minor >= 10) {
-      spinner.succeed(chalk.green(`Python ${version.raw} detected (${pythonCmd})`));
-      return { ok: true, version: version.raw, command: pythonCmd };
-    } else if (version) {
-      spinner.warn(chalk.yellow(`Python ${version.raw} found - 3.10+ recommended`));
-      return { ok: true, version: version.raw, command: pythonCmd, warning: true };
-    }
+  const versionOutput = runCommand(pythonCmd.join(' ') + ' --version');
+  const version = versionOutput && versionOutput.toLowerCase().includes('python 3')
+    ? parseVersion(versionOutput)
+    : null;
+  if (version && version.major >= 3 && version.minor >= 10) {
+    spinner.succeed(chalk.green(`Python ${version.raw} detected (${pythonCmd.join(' ')})`));
+    return { ok: true, version: version.raw, command: pythonCmd };
+  } else if (version) {
+    spinner.warn(chalk.yellow(`Python ${version.raw} found - 3.10+ recommended`));
+    return { ok: true, version: version.raw, command: pythonCmd, warning: true };
   }
 
   spinner.fail(chalk.red('Python 3 not found'));
@@ -170,9 +168,9 @@ async function installPythonDeps(pythonResult) {
   const spinner = ora({ text: 'Installing Python packages...', indent: 4 }).start();
 
   const pipCommands = [
-    `${pythonResult.command} -m pip install -r "${reqPath}" --quiet`,
-    `pip install -r "${reqPath}" --quiet`,
-    `pip3 install -r "${reqPath}" --quiet`,
+    `${pythonResult.command.join(' ')} -m pip install -r "${reqPath}" --quiet`,
+    'pip install -r "' + reqPath + '" --quiet',
+    'pip3 install -r "' + reqPath + '" --quiet',
   ];
 
   for (const cmd of pipCommands) {
@@ -194,8 +192,15 @@ async function installPythonDeps(pythonResult) {
 // Step 4: Configure API Keys
 // ─────────────────────────────────────────────────────────────
 
-async function configureApiKeys() {
+async function configureApiKeys(nonInteractive) {
   stepHeader(4, 6, 'API Key Configuration');
+
+  if (nonInteractive) {
+    console.log(chalk.dim('    Non-interactive mode: leaving all API keys empty.'));
+    console.log(chalk.dim('    Edit .env later to add OPENAI_API_KEY / VOYAGE_API_KEY / Google OAuth.'));
+    console.log();
+    return { OPENAI_API_KEY: '', VOYAGE_API_KEY: '', GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '' };
+  }
 
   console.log();
   console.log(chalk.dim('    Enter your API keys below. Press Enter to skip optional ones.'));
@@ -364,7 +369,7 @@ async function validateKeys(keys) {
 // Step 6: Generate .env and Show Summary
 // ─────────────────────────────────────────────────────────────
 
-async function generateEnvAndSummary(keys, validationResults, pythonResult, nodeResult, pipResult) {
+async function generateEnvAndSummary(keys, validationResults, pythonResult, nodeResult, pipResult, nonInteractive) {
   stepHeader(6, 6, 'Summary & .env Generation');
 
   // Read env.example as the template base
@@ -405,19 +410,23 @@ async function generateEnvAndSummary(keys, validationResults, pythonResult, node
   // Check if .env already exists
   let wrote = false;
   if (existsSync(envTargetPath)) {
-    const overwrite = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'value',
-        message: chalk.yellow('  .env already exists. Overwrite?'),
-        default: false,
-      },
-    ]);
-    if (overwrite.value) {
-      writeFileSync(envTargetPath, envContent, 'utf-8');
-      wrote = true;
+    if (nonInteractive) {
+      console.log(chalk.dim('    .env already exists — kept as-is (never overwritten)'));
     } else {
-      console.log(chalk.dim('    Kept existing .env'));
+      const overwrite = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'value',
+          message: chalk.yellow('  .env already exists. Overwrite?'),
+          default: false,
+        },
+      ]);
+      if (overwrite.value) {
+        writeFileSync(envTargetPath, envContent, 'utf-8');
+        wrote = true;
+      } else {
+        console.log(chalk.dim('    Kept existing .env'));
+      }
     }
   } else {
     writeFileSync(envTargetPath, envContent, 'utf-8');
@@ -516,7 +525,12 @@ async function generateEnvAndSummary(keys, validationResults, pythonResult, node
 export async function runSetup() {
   showWizardBanner();
 
+  const nonInteractive = process.argv.includes('--yes') || process.argv.includes('-y') || !process.stdin.isTTY;
+
   console.log(chalk.dim('  This wizard will configure Mega Brain for first-time use.'));
+  if (nonInteractive) {
+    console.log(chalk.dim('  Non-interactive mode: optional prompts are skipped, keys are left empty.'));
+  }
   console.log(chalk.dim('  It takes about 2 minutes.\n'));
 
   // Step 1: Python
@@ -529,11 +543,11 @@ export async function runSetup() {
   const pipResult = await installPythonDeps(pythonResult);
 
   // Step 4: API keys
-  const keys = await configureApiKeys();
+  const keys = await configureApiKeys(nonInteractive);
 
   // Step 5: Validate
   const validationResults = await validateKeys(keys);
 
   // Step 6: Summary + .env
-  await generateEnvAndSummary(keys, validationResults, pythonResult, nodeResult, pipResult);
+  await generateEnvAndSummary(keys, validationResults, pythonResult, nodeResult, pipResult, nonInteractive);
 }
