@@ -291,7 +291,7 @@ def extract_youtube_via_gemini(
         # Try loading from .env
         env_path = Path(__file__).resolve().parents[4] / ".env"
         if env_path.exists():
-            for line in env_path.read_text().splitlines():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("GEMINI_API_KEY="):
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     os.environ["GEMINI_API_KEY"] = api_key
@@ -531,7 +531,7 @@ def extract_local_video_via_gemini(
     if not api_key:
         env_path = Path(__file__).resolve().parents[4] / ".env"
         if env_path.exists():
-            for line in env_path.read_text().splitlines():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("GEMINI_API_KEY="):
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     os.environ["GEMINI_API_KEY"] = api_key
@@ -731,7 +731,7 @@ def fallback_identify_speakers_from_frames(
     if not api_key:
         env_path = Path(__file__).resolve().parents[4] / ".env"
         if env_path.exists():
-            for line in env_path.read_text().splitlines():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("GEMINI_API_KEY="):
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     os.environ["GEMINI_API_KEY"] = api_key

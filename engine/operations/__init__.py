@@ -175,7 +175,8 @@ def _run_preflight(**kwargs: Any) -> dict[str, Any]:
     checks.append({"name": "python", "ok": bool(ctx.get("python"))})
     checks.append({"name": "workspace", "ok": bool(ctx.get("workspace"))})
     checks.append({"name": "memory_store", "ok": bool(ctx.get("store_dir"))})
-    checks.append({"name": "model_router", "ok": bool(ctx.get("llm_available")), "note": "LLM providers offline -> deterministic planner"})
+    note = "LLM planner ready (Gemini primary, Groq fallback)" if ctx.get("llm_available") else "LLM providers offline -> deterministic planner"
+    checks.append({"name": "model_router", "ok": bool(ctx.get("llm_available")), "note": note})
     if ctx.get("is_git_repo"):
         checks.append({"name": "git", "ok": True, "note": f"{ctx.get('branch')} @ {ctx.get('last_commit')}"})
     ok = all(c["ok"] for c in checks)

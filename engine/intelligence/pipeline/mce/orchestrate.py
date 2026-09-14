@@ -6488,7 +6488,7 @@ def cmd_rag_index(slug: str) -> dict[str, Any]:
         if not has_embed_key:
             env_path = Path(__file__).resolve().parents[4] / ".env"
             if env_path.exists():
-                for line in env_path.read_text().splitlines():
+                for line in env_path.read_text(encoding="utf-8").splitlines():
                     if line.startswith(("OPENAI_API_KEY=", "GEMINI_API_KEY=", "VOYAGE_API_KEY=")):
                         val = line.split("=", 1)[1].strip().strip('"').strip("'")
                         if val and len(val) > 5:

@@ -84,9 +84,14 @@ class TaskExecutor:
 
         validation = validate_plan(plan.get("validation"), step_records)
 
+        # A step is judged by its FINAL attempt: a transient failure that a later
+        # retry recovered must not leave the run marked PARTIAL (STORY: npm test
+        # exit 1 on attempt 1, green on attempt 2 — run still reported PARTIAL).
+        # Later attempts share step_id and overwrite earlier ones in dict order.
+        final_records = {r.get("step_id"): r for r in step_records}
         errors = [
             f"{r.get('step_id')}: {r.get('error') or r.get('reason')}"
-            for r in step_records
+            for r in final_records.values()
             if not r.get("ok")
         ]
         for err in errors[:3]:

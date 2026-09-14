@@ -48,7 +48,7 @@ from typing import Any
 
 logger = logging.getLogger("mce.llm_extractor")
 
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "gemini-3.6-flash"
 # Retry policy (attempts + backoff) is now owned by ``mce.llm_retry`` so the
 # Gemini transport shares the exact exponential-backoff + jitter + Retry-After
 # math used by the embedding path (DRY). Legacy ``_MAX_RETRIES``/``_BASE_DELAY_S``
@@ -99,8 +99,18 @@ def _resolve_model() -> str:
 
 
 def is_available() -> bool:
-    """Lightweight probe used by callers to gate LLM-heavy work."""
-    return _resolve_api_key() is not None
+    """Lightweight probe used by callers to gate LLM-heavy work.
+
+    Requires BOTH the API key and the installed Gemini SDK — matching the
+    "SDK + credentials" contract used by ``llm_router.is_provider_available``.
+    """
+    if _resolve_api_key() is None:
+        return False
+    try:
+        import google.genai  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _run_prompt_via_gemini(

@@ -66,6 +66,29 @@ def test_retry_capped_on_same_cause(tmp_path):
     assert res["success"] is False
 
 
+def test_transient_failure_recovered_by_retry__run_is_clean(tmp_path):
+    stub = StubPlanner([{"action": "run_tests", "params": {}}], validation="tests")
+    executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=2)
+    calls = {"n": 0}
+
+    def flaky_run_tests(timeout=600):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": False, "error": "transient failure", "exit_code": 1}
+        return {"ok": True, "exit_code": 0, "runner": "stub"}
+
+    executor.tools.run_tests = flaky_run_tests
+    res = executor.run("flaky tests")
+    attempts = [r for r in res["steps"] if r["step_id"] == "s1"]
+    assert len(attempts) == 2
+    assert attempts[0]["ok"] is False
+    assert attempts[1]["ok"] is True
+    assert res["errors"] == []  # transient retry that recovered is NOT an error
+    assert res["success"] is True
+    assert res["validation"]["ok"] is True
+    assert res["next_steps"] == []
+
+
 def test_tests_validation_requires_green(tmp_path):
     (tmp_path / "test_a.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     stub = StubPlanner(

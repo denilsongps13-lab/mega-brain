@@ -56,7 +56,7 @@ def _load_openai_key() -> str | None:
         return key
     env_path = Path(__file__).resolve().parents[3] / ".env"
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.startswith("OPENAI_API_KEY="):
                 val = line.split("=", 1)[1].strip().strip('"').strip("'")
                 if val:

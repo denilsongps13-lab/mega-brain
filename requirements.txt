@@ -11,6 +11,7 @@ transitions>=0.9.0       # MCE state machine (engine/intelligence/pipeline/mce/s
 watchdog>=4.0.0          # inbox watcher daemon (engine/intelligence/pipeline/inbox_watcher.py)
 requests>=2.28.0         # RAG HTTP clients (rag/answer_builder.py, embedding_config.py, hybrid_index.py, query_expansion.py)
 openai>=1.0.0            # embeddings + MCE LLM calls (pipeline/embedder.py, mce/llm_provider.py)
+google-genai>=1.0.0      # Gemini provider (mce/llm_extractor.py, mce/llm_router.py) — Python 3.9+
 tiktoken>=0.6.0          # token counting (mce/token_counter.py)
 typing_extensions>=4.9.0 # runtime type hints (mce/role_tracker_reader.py)
 
