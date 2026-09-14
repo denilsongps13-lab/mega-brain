@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from engine.executor.executor import TaskExecutor, execute_objective
 
@@ -126,8 +127,15 @@ def test_context_step_produces_info(tmp_path):
     assert res["steps"][0]["action"] == "context"
 
 
+def _python_command(code: str) -> str:
+    """Use the exact interpreter running pytest; works on Windows and POSIX."""
+    executable = str(sys.executable).replace('"', '\\"')
+    return f'"{executable}" -c "{code}"'
+
+
 def test_failed_command_keeps_real_diagnostics_and_persists_jsonl(tmp_path):
-    stub = StubPlanner([{"action": "run", "params": {"command": "python -c \"import sys; print('OUT'); print('ERR', file=sys.stderr); sys.exit(7)\""}}])
+    command = _python_command("import sys; print('OUT'); print('ERR', file=sys.stderr); sys.exit(7)")
+    stub = StubPlanner([{"action": "run", "params": {"command": command}}])
     executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=1)
     res = executor.run("capture diagnostics")
     step = res["steps"][0]
@@ -144,7 +152,8 @@ def test_failed_command_keeps_real_diagnostics_and_persists_jsonl(tmp_path):
 
 
 def test_execution_log_redacts_sensitive_assignments(tmp_path):
-    stub = StubPlanner([{"action": "run", "params": {"command": "python -c \"print('GEMINI_API_KEY=supersecret')\""}}])
+    command = _python_command("print('GEMINI_API_KEY=supersecret')")
+    stub = StubPlanner([{"action": "run", "params": {"command": command}}])
     executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=1)
     res = executor.run("redact secrets")
     assert res["success"] is True
