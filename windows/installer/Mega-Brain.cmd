@@ -1,18 +1,13 @@
 @echo off
 rem ============================================================
 rem  Mega Brain - Windows launcher
-rem  Opens the desktop interface (tkinter GUI) via pythonw.exe so
-rem  no console window stays open. Pair with the "Mega Brain"
-rem  shortcut or run directly.
+rem  Opens the premium animated desktop interface via pythonw.exe.
+rem  Falls back to the legacy UI only if the new entrypoint is missing.
 rem  NEVER prints secret values.
 rem ============================================================
 setlocal
 title Mega Brain
 
-rem ------------------------------------------------------------
-rem 1) Identify the payload directory (this cmd lives in {app},
-rem    next to the mega-brain payload folder).
-rem ------------------------------------------------------------
 set "PAYLOAD=%~dp0mega-brain"
 if not exist "%PAYLOAD%\" (
     echo.
@@ -25,10 +20,6 @@ if not exist "%PAYLOAD%\" (
 )
 cd /d "%PAYLOAD%"
 
-rem ------------------------------------------------------------
-rem 2) Resolve python.exe via the py launcher (used by bootstrap)
-rem    and derive pythonw.exe from it (same folder).
-rem ------------------------------------------------------------
 set "PYEXE="
 where py >nul 2>&1
 if not errorlevel 1 (
@@ -40,8 +31,7 @@ if not defined PYEXE (
 )
 if not defined PYEXE (
     echo.
-    echo  Python 3 nao foi encontrado. Rode o instalador do Mega Brain
-    echo  novamente para instalar as dependencias.
+    echo  Python 3 nao foi encontrado. Rode o instalador do Mega Brain novamente.
     echo.
     pause
     exit /b 1
@@ -55,9 +45,7 @@ if /i not "%PYEXE:~-7%"=="pythonw" (
 )
 if not defined PYWEXE set "PYWEXE=%PYEXE%"
 
-rem ------------------------------------------------------------
-rem 3) Launch the desktop interface.
-rem    Default: GUI. Extra args (e.g. --selftest) pass through.
-rem ------------------------------------------------------------
-start "" "%PYWEXE%" "%~dp0mega-brain\windows\ui\megabrain-ui.pyw" %*
+set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v2.pyw"
+if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui.pyw"
+start "" "%PYWEXE%" "%UI%" %*
 exit /b 0
