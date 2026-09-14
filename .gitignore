@@ -49,6 +49,8 @@ venv/
 # --- Build / dist ---
 dist/
 build/
+.build/
+windows/installer/staging/
 
 # --- OS / IDE ---
 .DS_Store
