@@ -1,0 +1,80 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/animated-brain-exec-diagnostics
+    paths:
+      - 'windows/**'
+      - 'engine/**'
+      - 'tests/python/**'
+      - 'scripts/build-installer.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'requirements.txt'
+      - '.github/workflows/build-windows-installer.yml'
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-cov
+
+      - name: Validate Mega Brain UI v6
+        shell: pwsh
+        run: python windows/ui/megabrain-ui-v6.pyw --selftest
+
+      - name: Run Python test suite
+        shell: pwsh
+        run: python -m pytest tests/python/ -q --tb=short
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: npm run build:installer
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $path = 'dist/Mega-Brain-Setup-x64.exe'
+          if (!(Test-Path $path)) { throw "Installer not generated: $path" }
+          $item = Get-Item $path
+          Write-Host "Installer: $($item.FullName)"
+          Write-Host "Size: $([math]::Round($item.Length / 1MB, 2)) MB"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mega-Brain-Setup-x64-v6
+          path: dist/Mega-Brain-Setup-x64.exe
+          if-no-files-found: error
+          retention-days: 14
