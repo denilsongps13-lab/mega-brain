@@ -443,13 +443,13 @@ class SubagentBridge:
         self._update_manifest(file_path, status, error=error)
 
     def _update_manifest(self, file_path: str, status: str, error: str = "") -> None:
-        import fcntl
+        from engine.intelligence.pipeline.lock_utils import LOCK_EX, LOCK_UN, flock
 
         key = f"{self.slug}/{_Path(file_path).name}"
         try:
             lock_path = self._manifest_path.with_suffix(".lock")
             with open(lock_path, "w") as lf:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                flock(lf.fileno(), LOCK_EX)
                 try:
                     manifest = {}
                     if self._manifest_path.exists():
@@ -459,7 +459,7 @@ class SubagentBridge:
                     with open(self._manifest_path, "w") as f:
                         _json.dump(manifest, f, indent=2)
                 finally:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                    flock(lf.fileno(), LOCK_UN)
         except Exception as exc:
             logger.warning("SubagentBridge[%s]: manifest update failed: %s", self.slug, exc)
 

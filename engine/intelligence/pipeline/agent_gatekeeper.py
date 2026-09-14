@@ -16,13 +16,13 @@ Date: 2026-04-16
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from engine.intelligence.pipeline.lock_utils import LOCK_EX, LOCK_UN, flock
 from engine.intelligence.utils.agent_files import find_agent_file  # MCE-13.6
 from engine.paths import AGENTS_BUSINESS, AGENTS_EXTERNAL, ROOT
 
@@ -125,7 +125,7 @@ class AgentGatekeeper:
 
         # Open file for read+write (create if absent)
         with open(self.queue_path, "a+", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            flock(fh, LOCK_EX)
             try:
                 # Read all existing entries
                 fh.seek(0)
@@ -178,7 +178,7 @@ class AgentGatekeeper:
 
                 logger.info("[L3] Agent queued for approval: %s", slug)
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                flock(fh, LOCK_UN)
 
     # ── Gate Decision ────────────────────────────────────────────────────
 

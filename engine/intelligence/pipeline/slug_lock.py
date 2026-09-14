@@ -26,10 +26,11 @@ Usage:
         lock_mgr.release("alex-hormozi")
 """
 
-import fcntl
 import os
 from contextlib import contextmanager
 from pathlib import Path
+
+from engine.intelligence.pipeline.lock_utils import LOCK_EX, LOCK_UN, flock
 
 
 class SlugLockManager:
@@ -104,7 +105,7 @@ class SlugLockManager:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
 
         # Block until exclusive lock is acquired
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock(fd, LOCK_EX)
 
         # Write our PID for stale detection
         os.ftruncate(fd, 0)
@@ -126,7 +127,7 @@ class SlugLockManager:
             return
 
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            flock(fd, LOCK_UN)
         except OSError:
             pass
 

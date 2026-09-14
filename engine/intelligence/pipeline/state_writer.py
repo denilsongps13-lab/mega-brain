@@ -27,13 +27,14 @@ Usage:
     merged = sidecar.read_all()
 """
 
-import fcntl
 import json
 import os
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any
+
+from engine.intelligence.pipeline.lock_utils import LOCK_EX, LOCK_UN, flock
 
 # Module-level registry of per-path threading locks.
 # fcntl.flock is advisory and only works across processes —
@@ -93,7 +94,7 @@ class SafeStateWriter:
         self._fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
 
         # Acquire exclusive flock (inter-process serialization)
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        flock(self._fd, LOCK_EX)
 
         # Read current content of the actual state file
         try:
@@ -134,7 +135,7 @@ class SafeStateWriter:
             # Release flock and close fd
             if self._fd is not None:
                 try:
-                    fcntl.flock(self._fd, fcntl.LOCK_UN)
+                    flock(self._fd, LOCK_UN)
                 except OSError:
                     pass
                 try:

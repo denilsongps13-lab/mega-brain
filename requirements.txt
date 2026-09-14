@@ -7,6 +7,11 @@ PyYAML>=6.0
 # `from transitions import Machine` — required for pipeline state transitions + tests
 transitions>=0.9.0
 
+# === INBOX WATCHER (engine/intelligence/pipeline/inbox_watcher.py) ===
+# FSEvents daemon — monitors all */inbox/ directories and triggers the
+# classify-then-organize pipeline when files land.
+watchdog>=4.0.0
+
 # === SPEAKER DIARIZATION (core/intelligence/speakers/) ===
 # Install: pip install -r requirements.txt
 # Note: pyannote.audio requires HuggingFace model license:

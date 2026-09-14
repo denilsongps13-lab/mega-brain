@@ -26,13 +26,14 @@ Version: 1.0.0  [STORY-PIP-003]
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from engine.intelligence.pipeline.lock_utils import LOCK_EX, LOCK_UN, flock
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +335,7 @@ class ManifestUpdater:
         fd = os.open(str(path), os.O_RDWR | os.O_CREAT)
         try:
             # Acquire exclusive lock -- blocks until available
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock(fd, LOCK_EX)
             try:
                 # Read current content
                 with os.fdopen(os.dup(fd), "r", encoding="utf-8") as rf:
@@ -363,7 +364,7 @@ class ManifestUpdater:
 
             finally:
                 # Release lock
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock(fd, LOCK_UN)
         finally:
             os.close(fd)
 
