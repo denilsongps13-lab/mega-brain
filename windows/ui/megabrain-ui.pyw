@@ -9,8 +9,10 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
+import random
 import sys
 import threading
 import time
@@ -19,17 +21,11 @@ from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Any
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Bootstrap: make sure engine is importable regardless of how this file is
-# invoked (pythonw, python, double-click).  ``engine.paths.ROOT`` uses
-# ``__file__`` internally but being explicit about sys.path doesn't hurt.
-# ─────────────────────────────────────────────────────────────────────────────
-_ROOT = Path(__file__).resolve().parent.parent.parent           # payload root
+_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-os.chdir(_ROOT)  # nail cwd for npm / git operations run by the executor
+os.chdir(_ROOT)
 
-# Dark palette
 _BG      = "#0f1117"
 _BG2     = "#1a1d27"
 _BG3     = "#232733"
@@ -50,9 +46,32 @@ PHASE_LABELS = {
     "validating": "Validando...",
 }
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Self-test mode (no GUI needed)
-# ═════════════════════════════════════════════════════════════════════════════
+_ANIM_SETTINGS_FILE = ".data/megabrain/ui-animation.json"
+_ANIM_DEFAULTS = {"enabled": True, "intensity": "medium", "reduce": False}
+
+
+def _load_anim_settings() -> dict:
+    try:
+        p = _ROOT / _ANIM_SETTINGS_FILE
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            out = dict(_ANIM_DEFAULTS)
+            out.update({k: data[k] for k in _ANIM_DEFAULTS if k in data})
+            return out
+    except Exception:
+        pass
+    return dict(_ANIM_DEFAULTS)
+
+
+def _save_anim_settings(settings: dict) -> None:
+    try:
+        p = _ROOT / _ANIM_SETTINGS_FILE
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _selftest() -> None:
     """Run headless integration test for the engine hooks. Exit 0/1."""
     import tempfile, traceback
@@ -60,8 +79,6 @@ def _selftest() -> None:
     from engine.executor.context import load_project_context
 
     print("[selftest] verifying engine imports OK")
-
-    # 1 — phase_observer
     phases: list[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="mb_ui_test_"))
     ok = True
@@ -85,18 +102,15 @@ def _selftest() -> None:
         assert (tmp / "ok.txt").read_text(encoding="utf-8") == "x"
         print("[selftest] phase_observer .............. OK")
 
-        # 2 — load_project_context
         ctx = load_project_context(str(_ROOT))
         assert ctx.get("python"), "python not detected"
         print("[selftest] project_context .............. OK")
 
-        # 3 — provider status
         from engine.intelligence.pipeline.mce.llm_router import is_provider_available
         gemini = is_provider_available("gemini")
         groq   = is_provider_available("groq")
         print(f"[selftest] providers: gemini={gemini} groq={groq}")
 
-        # 4 — memory persistence
         from engine.executor.memory import ProjectMemory
         mem = ProjectMemory(str(tmp))
         mem.record_task("selftest task", ok=True)
@@ -104,7 +118,6 @@ def _selftest() -> None:
         assert state["completed"][-1]["task"] == "selftest task"
         print("[selftest] memory persistence ........... OK")
 
-        # 5 — permission confirmer wiring
         from engine.executor.permissions import PermissionGate
         calls: list[str] = []
         gate = PermissionGate(tmp, mode="ask", confirmer=lambda r: calls.append(r) or True)
@@ -113,8 +126,16 @@ def _selftest() -> None:
         assert allowed is True and calls and "sub" in calls[-1]
         gate_deny = PermissionGate(tmp, mode="ask", confirmer=lambda r: False)
         allowed2, _, _ = gate_deny.decide(gate_deny.check_step("write", {"path": str(tmp / "y.txt")}))
-        assert allowed2 is True  # write/run on safe paths is allowed, no confirm
+        assert allowed2 is True
         print("[selftest] permission confirmer .......... OK")
+
+        _save_anim_settings({"enabled": False, "intensity": "low", "reduce": True})
+        loaded = _load_anim_settings()
+        assert loaded["enabled"] is False and loaded["intensity"] == "low" and loaded["reduce"] is True
+        _save_anim_settings(_ANIM_DEFAULTS)
+        loaded2 = _load_anim_settings()
+        assert loaded2["enabled"] is True and loaded2["intensity"] == "medium"
+        print("[selftest] animation settings ............ OK")
 
     except Exception:
         traceback.print_exc()
@@ -127,9 +148,6 @@ def _selftest() -> None:
     sys.exit(0 if ok else 1)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Engine wrappers (called from worker thread, results via queue)
-# ═════════════════════════════════════════════════════════════════════════════
 def _worker_context(result_q: queue.Queue):
     try:
         from engine.executor.context import load_project_context
@@ -164,7 +182,6 @@ def _worker_execute(objective: str, phase_q: queue.Queue, result_q: queue.Queue)
 
 
 def _worker_save_keys(gemini: str, groq: str, result_q: queue.Queue):
-    """Surgically update GEMINI_API_KEY / GROQ_API_KEY in .env (no values printed)."""
     try:
         env_path = _ROOT / ".env"
         lines: list[str] = []
@@ -178,7 +195,6 @@ def _worker_save_keys(gemini: str, groq: str, result_q: queue.Queue):
             else:
                 lines.append(entry)
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        # Clear env cache so re-read picks up new values
         for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "GOOGLE_API_KEY"):
             os.environ.pop(k, None)
         result_q.put(("save_keys", {"ok": True}))
@@ -191,35 +207,14 @@ def _worker_test_provider(provider: str, result_q: queue.Queue):
         from engine.intelligence.pipeline.mce.llm_router import _run_gemini, _run_groq
         run = _run_gemini if provider == "gemini" else _run_groq
         start = time.time()
-        text = run(f"Say PONG only. No explanation.", max_output_tokens=20)
+        text = run("Say PONG only. No explanation.", max_output_tokens=20)
         elapsed = round(time.time() - start, 1)
         result_q.put(("test_provider", {"ok": True, "provider": provider, "elapsed": elapsed, "text": text}))
     except Exception as exc:
         result_q.put(("test_provider", {"ok": False, "provider": provider, "error": str(exc)}))
 
 
-def _read_masked_key(env_var: str) -> tuple[bool, int]:
-    """Return (has_key, length) without printing the value."""
-    val = os.environ.get(env_var, "")
-    if val:
-        return True, len(val)
-    # Re-read from .env file
-    env_path = _ROOT / ".env"
-    if env_path.exists():
-        try:
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                if line.startswith(env_var + "="):
-                    candidate = line.split("=", 1)[1].strip()
-                    if candidate:
-                        os.environ.setdefault(env_var, candidate)
-                        return True, len(candidate)
-        except OSError:
-            pass
-    return False, 0
-
-
 def _read_env_value(env_var: str) -> str:
-    """Read raw value from .env for Settings fields. NEVER printed to UI."""
     val = os.environ.get(env_var, "")
     if val:
         return val
@@ -234,12 +229,212 @@ def _read_env_value(env_var: str) -> str:
     return ""
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Main Application
-# ═════════════════════════════════════════════════════════════════════════════
-class MegaBrainApp:
-    """Dark tkinter GUI for the Mega Brain local runtime."""
+class _BrainAnimation:
+    IDLE      = "idle"
+    THINKING  = "thinking"
+    PLANNING  = "planning"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    ERROR     = "error"
 
+    _RGB_BASE  = (91, 127, 255)
+    _RGB_GREEN = (46, 160, 67)
+    _RGB_RED   = (207, 34, 46)
+
+    def __init__(self, canvas: tk.Canvas, settings: dict):
+        self._c = canvas
+        self.state = self.IDLE
+        self._apply_settings(settings)
+        self._nodes: list[tuple[float, float, float, float]] = []
+        self._conns: list[tuple[int, int, float]] = []
+        self._parts: list[dict] = []
+        self._anim_id = None
+        self._running = False
+        self._visible = True
+        self._focused = True
+        self._t0 = time.time()
+        self._state_t = 0.0
+        self._last_w = 0
+        self._last_h = 0
+
+    def _apply_settings(self, s: dict):
+        self.enabled = s.get("enabled", True)
+        self.intensity = s.get("intensity", "medium")
+        self.reduce = s.get("reduce", False)
+        m = {"low": (18, 4, 12, 3), "high": (55, 24, 28, 6),
+             "medium": (36, 12, 20, 4)}
+        self._nc, self._pc, self._fps, self._gr = m.get(self.intensity, m["medium"])
+
+    def update_settings(self, s: dict):
+        self._apply_settings(s)
+        self._nodes.clear()
+        self._conns.clear()
+        self._parts.clear()
+
+    def _build_topology(self, w: int, h: int):
+        self._nodes.clear(); self._conns.clear(); self._parts.clear()
+        if w < 50 or h < 50:
+            return
+        cx, cy = w / 2, h / 2
+        bw = min(w * 0.88, h * 0.82)
+        bh = bw * 0.78
+        half = self._nc // 2
+        for side in (-1, 1):
+            for _ in range(half):
+                a = random.uniform(0, 6.2831)
+                r = math.sqrt(random.uniform(0, 1))
+                x = cx + side * bw * 0.22 + r * math.cos(a) * bw * 0.36
+                y = cy + r * math.sin(a) * bh * 0.44
+                self._nodes.append((x, y, random.uniform(0, 6.2831),
+                                    random.uniform(1.4, 3.0)))
+        maxd = min(w, h) * 0.22
+        for i in range(len(self._nodes)):
+            for j in range(i + 1, len(self._nodes)):
+                d = math.hypot(self._nodes[i][0] - self._nodes[j][0],
+                               self._nodes[i][1] - self._nodes[j][1])
+                if d < maxd:
+                    self._conns.append((i, j, d))
+        for _ in range(self._pc):
+            self._new_part()
+
+    def _new_part(self):
+        if self._conns:
+            c = random.choice(self._conns)
+            self._parts.append({"c": c, "p": random.random(),
+                                "s": random.uniform(0.004, 0.014),
+                                "r": random.uniform(1.0, 2.2)})
+
+    def start(self):
+        self._running = True; self._t0 = time.time(); self._tick()
+
+    def stop(self):
+        self._running = False
+        if self._anim_id:
+            try:
+                self._c.after_cancel(self._anim_id)
+            except Exception:
+                pass
+            self._anim_id = None
+
+    def pause(self):
+        self._visible = False
+
+    def resume(self):
+        self._visible = True
+
+    def focus_out(self):
+        self._focused = False
+
+    def focus_in(self):
+        self._focused = True
+
+    def set_state(self, state: str):
+        self.state = state
+        self._state_t = time.time()
+
+    def _tick(self):
+        if not self._running:
+            return
+        now = time.time()
+        fps = max(8, self._fps // 2 if self.reduce else self._fps)
+        if not self._focused:
+            fps = max(6, fps // 2)
+        dt = 1.0 / fps
+        if now - self._t0 < dt:
+            self._anim_id = self._c.after(int(dt * 500), self._tick)
+            return
+        self._t0 = now
+        if not self._visible:
+            self._anim_id = self._c.after(300, self._tick)
+            return
+        self._draw()
+        self._anim_id = self._c.after(int(dt * 1000), self._tick)
+
+    @staticmethod
+    def _hex(r: int, g: int, b: int) -> str:
+        return f"#{max(0, min(255, r)):02x}{max(0, min(255, g)):02x}{max(0, min(255, b)):02x}"
+
+    def _draw(self):
+        self._c.delete("brain")
+        if not self.enabled:
+            return
+        w = self._c.winfo_width()
+        h = self._c.winfo_height()
+        if w < 50 or h < 50:
+            return
+        if (not self._nodes or abs(w - self._last_w) > 40 or abs(h - self._last_h) > 40):
+            self._build_topology(w, h)
+            self._last_w = w
+            self._last_h = h
+
+        t = time.time()
+        cyc = 5.0
+        br = 0.7 + 0.3 * (0.5 + 0.5 * math.sin(6.2831 * t / cyc))
+        if self.state == self.THINKING:
+            br = 0.8 + 0.2 * (0.5 + 0.5 * math.sin(6.2831 * t / cyc))
+        elif self.state == self.PLANNING:
+            br = 0.75 + 0.25 * (0.5 + 0.5 * math.sin(6.2831 * t / cyc * 1.15))
+        elif self.state == self.EXECUTING:
+            br = 0.82 + 0.18 * (0.5 + 0.5 * math.sin(6.2831 * t / (cyc * 0.6)))
+        elif self.state == self.COMPLETED:
+            if t - self._state_t < 1.0:
+                br = 1.0
+            else:
+                self.state = self.IDLE
+        elif self.state == self.ERROR:
+            if t - self._state_t >= 1.0:
+                self.state = self.IDLE
+
+        base = self._RGB_BASE
+        if self.state == self.COMPLETED and t - self._state_t < 1.0:
+            bl = min(1.0, t - self._state_t)
+            clr = tuple(int(base[i] + (self._RGB_GREEN[i] - base[i]) * bl) for i in range(3))
+        elif self.state == self.ERROR and t - self._state_t < 1.0:
+            bl = min(1.0, t - self._state_t)
+            clr = tuple(int(base[i] + (self._RGB_RED[i] - base[i]) * bl) for i in range(3))
+        else:
+            clr = base
+
+        hc = [int(c * br * 0.25) for c in clr]
+        for i, j, _ in self._conns:
+            self._c.create_line(
+                self._nodes[i][0], self._nodes[i][1],
+                self._nodes[j][0], self._nodes[j][1],
+                fill=self._hex(*hc), width=1, tags="brain")
+
+        for x, y, ph, sz in self._nodes:
+            wave = 0.5 + 0.5 * math.sin(6.2831 * t / 3.2 + ph)
+            nb = br * (0.45 + 0.55 * wave)
+            gb = nb * 0.4
+            rad = sz + self._gr * 1.8
+            self._c.create_oval(
+                x - rad, y - rad, x + rad, y + rad,
+                fill=self._hex(int(clr[0] * gb), int(clr[1] * gb), int(clr[2] * gb)),
+                outline="", tags="brain")
+            cr = sz * 0.7
+            self._c.create_oval(
+                x - cr, y - cr, x + cr, y + cr,
+                fill=self._hex(int(clr[0] * nb), int(clr[1] * nb), int(clr[2] * nb)),
+                outline="", tags="brain")
+
+        speed_mult = 1.35 if self.state == self.EXECUTING else 1.0
+        for p in self._parts:
+            p["p"] += p["s"] * speed_mult
+            if p["p"] >= 1.0:
+                p["p"] -= 1.0
+                if self._conns:
+                    p["c"] = random.choice(self._conns)
+            ci, cj, _ = p["c"]
+            px = self._nodes[ci][0] + (self._nodes[cj][0] - self._nodes[ci][0]) * p["p"]
+            py = self._nodes[ci][1] + (self._nodes[cj][1] - self._nodes[ci][1]) * p["p"]
+            pb = br * 0.7
+            self._c.create_oval(
+                px - p["r"], py - p["r"], px + p["r"], py + p["r"],
+                fill=self._hex(int(clr[0] * pb), int(clr[1] * pb), int(clr[2] * pb)),
+                outline="", tags="brain")
+
+
+class MegaBrainApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Mega Brain")
@@ -252,25 +447,25 @@ class MegaBrainApp:
         self._result_q: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._running = False
-
-        self._chat_log: list[str] = []
         self._current_view = tk.StringVar(value="chat")
         self._views: dict[str, tk.Frame] = {}
-
         self._ctx: dict[str, Any] = {}
         self._status_labels: dict[str, tk.Label] = {}
+        self._brain: _BrainAnimation | None = None
 
         self._build_ui()
+        self._brain = _BrainAnimation(self._brain_canvas, _load_anim_settings())
+        self._brain.start()
+
+        self.root.bind("<Unmap>", self._on_unmap)
+        self.root.bind("<Map>", self._on_map)
+        self.root.bind("<FocusIn>", self._on_focus_in)
+        self.root.bind("<FocusOut>", self._on_focus_out)
         self.root.after(100, self._poll_queues)
         self.root.after(500, self._load_initial_status)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # UI construction
-    # ──────────────────────────────────────────────────────────────────────
     def _build_ui(self):
         r = self.root
-
-        # Top header
         hdr = tk.Frame(r, bg=_BG2, bd=0, highlightthickness=0)
         hdr.pack(fill=tk.X, side=tk.TOP)
         tk.Label(hdr, text="MEGA BRAIN", font=("Segoe UI", 16, "bold"),
@@ -280,28 +475,21 @@ class MegaBrainApp:
         self._status_labels["groq"] = self._badge(hdr, "Groq: ...", _FG2)
         self._status_labels["memory"] = self._badge(hdr, "Memoria: ...", _FG2)
 
-        # Body: sidebar + content
         body = tk.Frame(r, bg=_BG, bd=0, highlightthickness=0)
         body.pack(fill=tk.BOTH, expand=True)
-
-        # Sidebar
         sb = tk.Frame(body, bg=_BG2, width=180, bd=0, highlightthickness=0)
         sb.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 1), pady=0)
         sb.pack_propagate(False)
         for label, key in [
-            ("Nova tarefa", "chat"),
-            ("Memoria", "memory"),
-            ("Contexto", "context"),
-            ("Status", "status"),
+            ("Nova tarefa", "chat"), ("Memoria", "memory"),
+            ("Contexto", "context"), ("Status", "status"),
             ("Configuracoes", "settings"),
         ]:
-            b = tk.Button(sb, text=label, font=("Segoe UI", 11), fg=_FG, bg=_BG2,
-                          activeforeground=_ACCENT, activebackground=_BG3,
-                          bd=0, anchor="w", padx=16, pady=8,
-                          command=lambda k=key: self._switch_view(k))
-            b.pack(fill=tk.X)
+            tk.Button(sb, text=label, font=("Segoe UI", 11), fg=_FG, bg=_BG2,
+                      activeforeground=_ACCENT, activebackground=_BG3,
+                      bd=0, anchor="w", padx=16, pady=8,
+                      command=lambda k=key: self._switch_view(k)).pack(fill=tk.X)
 
-        # Content container
         self._content = tk.Frame(body, bg=_BG, bd=0, highlightthickness=0)
         self._content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._build_chat_view()
@@ -317,68 +505,53 @@ class MegaBrainApp:
         lbl.pack(side=tk.LEFT)
         return lbl
 
-    # ── Chat view ─────────────────────────────────────────────────────────
     def _build_chat_view(self):
         f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
         self._views["chat"] = f
 
-        self._chat_text = tk.Text(f, bg=_BG, fg=_FG, insertbackground=_FG,
+        # Keep the neural canvas permanently visible in the upper half of chat.
+        hero = tk.Frame(f, bg=_BG, height=300)
+        hero.pack(fill=tk.BOTH, expand=True)
+        hero.pack_propagate(False)
+        self._brain_canvas = tk.Canvas(hero, bg=_BG, highlightthickness=0, bd=0)
+        self._brain_canvas.pack(fill=tk.BOTH, expand=True)
+        self._brain_canvas.create_text(
+            18, 16, anchor="nw", text="NÚCLEO NEURAL",
+            fill=_FG2, font=("Segoe UI", 10, "bold"), tags="overlay")
+
+        lower = tk.Frame(f, bg=_BG, bd=0, highlightthickness=0)
+        lower.pack(fill=tk.BOTH, expand=True)
+        self._chat_text = tk.Text(lower, bg=_BG, fg=_FG, insertbackground=_FG,
                                   font=("Consolas", 11), wrap=tk.WORD,
-                                  state=tk.DISABLED, padx=12, pady=12,
+                                  state=tk.DISABLED, height=8, padx=12, pady=10,
                                   highlightthickness=0, bd=0,
                                   selectbackground=_ACCENT)
-        scroll = tk.Scrollbar(f, command=self._chat_text.yview)
+        scroll = tk.Scrollbar(lower, command=self._chat_text.yview)
         self._chat_text.configure(yscrollcommand=scroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self._chat_text.pack(fill=tk.BOTH, expand=True)
-
         self._chat_text.tag_configure("user", foreground=_CYAN, font=("Consolas", 11, "bold"))
         self._chat_text.tag_configure("system", foreground=_FG2)
         self._chat_text.tag_configure("phase", foreground=_YELLOW)
         self._chat_text.tag_configure("ok", foreground=_GREEN)
         self._chat_text.tag_configure("error", foreground=_RED)
-        self._chat_text.tag_configure("title", foreground=_FG, font=("Consolas", 12, "bold"))
 
-        # Input area
         inp = tk.Frame(f, bg=_BG, bd=0, highlightthickness=0)
-        inp.pack(fill=tk.X, padx=12, pady=(4, 12))
+        inp.pack(fill=tk.X, padx=10, pady=(4, 10))
         self._input = tk.Text(inp, bg=_INPUT_BG, fg=_FG, insertbackground=_FG,
                               font=("Segoe UI", 12), height=3, wrap=tk.WORD,
                               highlightthickness=1, highlightbackground=_BG3,
                               highlightcolor=_ACCENT, bd=0, padx=10, pady=8)
         self._input.bind("<Return>", self._on_enter)
-        self._input.bind("<Shift-Return>", lambda e: "break")
         self._input.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-
         self._send_btn = tk.Button(inp, text="EXECUTAR", font=("Segoe UI", 11, "bold"),
                                    fg=_FG, bg=_ACCENT, activeforeground="#fff",
                                    activebackground="#4a64d9", bd=0, padx=20, pady=10,
                                    command=self._send_task)
         self._send_btn.pack(side=tk.RIGHT, fill=tk.Y)
-        self._placeholder_shown = True
-        self._input.bind("<FocusIn>", self._clear_placeholder)
-        self._input.bind("<FocusOut>", self._show_placeholder)
-        self._input.bind("<Key>", self._on_key)
-        self._show_placeholder()
-
-    def _show_placeholder(self, event=None):
-        if self._input.get("1.0", tk.END).strip() == "" and self._placeholder_shown:
-            self._input.configure(fg=_PLACEHOLDER)
-            self._input.insert("1.0", "O que voce quer que o Mega Brain faca?")
-            self._input.tag_add("ph", "1.0", tk.END)
-
-    def _clear_placeholder(self, event=None):
-        if self._placeholder_shown:
-            self._input.delete("1.0", tk.END)
-            self._input.configure(fg=_FG)
-            self._placeholder_shown = False
-
-    def _on_key(self, event):
-        if self._placeholder_shown and event.keysym not in ("Shift_L", "Shift_R"):
-            self._clear_placeholder()
 
     def _on_enter(self, event):
-        if event.state & 0x0001:  # Shift held → newline, not send
+        if event.state & 0x0001:
             return
         self._send_task()
         return "break"
@@ -393,7 +566,7 @@ class MegaBrainApp:
         if self._running:
             return
         obj = self._input.get("1.0", tk.END).strip()
-        if not obj or (obj == "O que voce quer que o Mega Brain faca?"):
+        if not obj:
             return
         self._input.delete("1.0", tk.END)
         self._input.configure(state=tk.DISABLED)
@@ -403,275 +576,134 @@ class MegaBrainApp:
         self._worker = threading.Thread(target=_worker_execute, args=(obj, self._phase_q, self._result_q), daemon=True)
         self._worker.start()
 
-    # ── Memory view ───────────────────────────────────────────────────────
     def _build_memory_view(self):
-        f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
+        f = tk.Frame(self._content, bg=_BG)
         self._views["memory"] = f
-        tk.Label(f, text="MEMORIA DO PROJETO", font=("Segoe UI", 14, "bold"),
-                 fg=_FG, bg=_BG, anchor="w", padx=16, pady=10).pack(fill=tk.X)
-        self._mem_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), wrap=tk.WORD,
-                                 state=tk.DISABLED, padx=16, pady=8, highlightthickness=0, bd=0)
-        self._mem_text.pack(fill=tk.BOTH, expand=True)
-        self._mem_text.tag_configure("title", foreground=_CYAN, font=("Consolas", 11, "bold"))
-        self._mem_text.tag_configure("item", foreground=_FG)
-        self._mem_text.tag_configure("dim", foreground=_FG2)
-        btn = tk.Button(f, text="Atualizar", font=("Segoe UI", 10), fg=_FG, bg=_BG3,
-                        activebackground=_ACCENT, bd=0, padx=12, pady=4,
-                        command=self._refresh_memory)
-        btn.pack(padx=16, pady=6, anchor="w")
+        tk.Label(f, text="MEMORIA DO PROJETO", font=("Segoe UI", 14, "bold"), fg=_FG, bg=_BG).pack(anchor="w", padx=16, pady=10)
+        self._mem_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), wrap=tk.WORD, state=tk.DISABLED, highlightthickness=0, bd=0)
+        self._mem_text.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        tk.Button(f, text="Atualizar", command=self._refresh_memory, bg=_BG3, fg=_FG, bd=0).pack(anchor="w", padx=16, pady=6)
 
     def _refresh_memory(self):
-        self._mem_text.configure(state=tk.NORMAL)
-        self._mem_text.delete("1.0", tk.END)
-        self._mem_text.insert(tk.END, "Carregando...\n", "dim")
-        self._mem_text.configure(state=tk.DISABLED)
         threading.Thread(target=self._load_memory, daemon=True).start()
 
     def _load_memory(self):
         try:
             from engine.executor.memory import ProjectMemory
             mem = ProjectMemory(str(_ROOT))
-            state = mem.load()
-            events = mem.recent_events(limit=30)
-            md = mem.summary_markdown()
-            self.root.after(0, self._render_memory, state, events, md)
+            self.root.after(0, self._render_memory, mem.summary_markdown())
         except Exception as exc:
-            self.root.after(0, self._render_memory_error, str(exc))
+            self.root.after(0, self._render_memory, f"Erro: {exc}")
 
-    def _render_memory(self, state, events, md):
+    def _render_memory(self, text):
         self._mem_text.configure(state=tk.NORMAL)
         self._mem_text.delete("1.0", tk.END)
-        self._mem_text.insert(tk.END, md + "\n\n", "item")
-        if events:
-            self._mem_text.insert(tk.END, "--- Eventos recentes ---\n", "title")
-            for ev in events[-20:]:
-                ts = ev.get("ts", "")[:16]
-                kind = ev.get("kind", "")
-                detail = ev.get("text") or ev.get("task") or ev.get("objective") or ev.get("error") or ""
-                self._mem_text.insert(tk.END, f"  [{ts}] {kind}: {detail[:100]}\n", "item")
+        self._mem_text.insert(tk.END, text)
         self._mem_text.configure(state=tk.DISABLED)
 
-    def _render_memory_error(self, msg):
-        self._mem_text.configure(state=tk.NORMAL)
-        self._mem_text.delete("1.0", tk.END)
-        self._mem_text.insert(tk.END, f"Erro ao carregar memoria: {msg}\n", "error")
-        self._mem_text.configure(state=tk.DISABLED)
-
-    # ── Context view ──────────────────────────────────────────────────────
     def _build_context_view(self):
-        f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
+        f = tk.Frame(self._content, bg=_BG)
         self._views["context"] = f
-        tk.Label(f, text="CONTEXTO", font=("Segoe UI", 14, "bold"),
-                 fg=_FG, bg=_BG, anchor="w", padx=16, pady=10).pack(fill=tk.X)
-        self._ctx_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), wrap=tk.WORD,
-                                 state=tk.DISABLED, padx=16, pady=8, highlightthickness=0, bd=0)
-        self._ctx_text.pack(fill=tk.BOTH, expand=True)
-        self._ctx_text.tag_configure("label", foreground=_CYAN)
-        self._ctx_text.tag_configure("value", foreground=_FG)
-        self._ctx_text.tag_configure("dim", foreground=_FG2)
-        self._ctx_text.tag_configure("err", foreground=_RED)
-        btn = tk.Button(f, text="Atualizar", font=("Segoe UI", 10), fg=_FG, bg=_BG3,
-                        activebackground=_ACCENT, bd=0, padx=12, pady=4,
-                        command=self._refresh_context)
-        btn.pack(padx=16, pady=6, anchor="w")
+        tk.Label(f, text="CONTEXTO", font=("Segoe UI", 14, "bold"), fg=_FG, bg=_BG).pack(anchor="w", padx=16, pady=10)
+        self._ctx_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), state=tk.DISABLED, highlightthickness=0, bd=0)
+        self._ctx_text.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        tk.Button(f, text="Atualizar", command=self._refresh_context, bg=_BG3, fg=_FG, bd=0).pack(anchor="w", padx=16, pady=6)
 
     def _refresh_context(self):
-        self._ctx_text.configure(state=tk.NORMAL)
-        self._ctx_text.delete("1.0", tk.END)
-        self._ctx_text.insert(tk.END, "Carregando...\n", "dim")
-        self._ctx_text.configure(state=tk.DISABLED)
         threading.Thread(target=_worker_context, args=(self._result_q,), daemon=True).start()
 
     def _render_context(self, ctx):
         self._ctx = ctx
-        t = self._ctx_text
-        t.configure(state=tk.NORMAL)
-        t.delete("1.0", tk.END)
-        if "error" in ctx:
-            t.insert(tk.END, f"Erro: {ctx['error']}\n", "err")
-        else:
-            for label, key in [
-                ("Projeto", "project"),
-                ("Workspace", "workspace"),
-                ("Git repo", "is_git_repo"),
-                ("Branch", "branch"),
-                ("Ultimo commit", "last_commit"),
-                ("Arquivos alterados", "dirty_files"),
-                ("Python", "python"),
-                ("Memoria store", "store_dir"),
-            ]:
-                t.insert(tk.END, f"{label}: ", "label")
-                t.insert(tk.END, f"{ctx.get(key, '-')}\n", "value")
-            # Resume
-            resume = ctx.get("resume", {})
-            t.insert(tk.END, "\n--- Ultima tarefa ---\n", "label")
-            t.insert(tk.END, f"Objetivo: {resume.get('last_objective') or '-'}\n", "value")
-            t.insert(tk.END, f"Corrente: {resume.get('current_objective') or '-'}\n", "value")
-            ns = resume.get("next_steps") or []
-            if ns:
-                t.insert(tk.END, "Proximos passos:\n", "label")
-                for s in ns:
-                    t.insert(tk.END, f"  - {s}\n", "value")
-        t.configure(state=tk.DISABLED)
+        self._ctx_text.configure(state=tk.NORMAL)
+        self._ctx_text.delete("1.0", tk.END)
+        self._ctx_text.insert(tk.END, json.dumps(ctx, ensure_ascii=False, indent=2, default=str))
+        self._ctx_text.configure(state=tk.DISABLED)
 
-    # ── Status view ───────────────────────────────────────────────────────
     def _build_status_view(self):
-        f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
+        f = tk.Frame(self._content, bg=_BG)
         self._views["status"] = f
-        tk.Label(f, text="STATUS DO RUNTIME", font=("Segoe UI", 14, "bold"),
-                 fg=_FG, bg=_BG, anchor="w", padx=16, pady=10).pack(fill=tk.X)
-        self._status_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), wrap=tk.WORD,
-                                    state=tk.DISABLED, padx=16, pady=8, highlightthickness=0, bd=0)
-        self._status_text.pack(fill=tk.BOTH, expand=True)
-        self._status_text.tag_configure("ok", foreground=_GREEN)
-        self._status_text.tag_configure("off", foreground=_RED)
-        self._status_text.tag_configure("label", foreground=_CYAN)
-        self._status_text.tag_configure("dim", foreground=_FG2)
-        btn = tk.Button(f, text="Atualizar", font=("Segoe UI", 10), fg=_FG, bg=_BG3,
-                        activebackground=_ACCENT, bd=0, padx=12, pady=4,
-                        command=self._refresh_status)
-        btn.pack(padx=16, pady=6, anchor="w")
+        tk.Label(f, text="STATUS DO RUNTIME", font=("Segoe UI", 14, "bold"), fg=_FG, bg=_BG).pack(anchor="w", padx=16, pady=10)
+        self._status_text = tk.Text(f, bg=_BG, fg=_FG, font=("Consolas", 10), state=tk.DISABLED, highlightthickness=0, bd=0)
+        self._status_text.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+        tk.Button(f, text="Atualizar", command=self._refresh_status, bg=_BG3, fg=_FG, bd=0).pack(anchor="w", padx=16, pady=6)
 
     def _refresh_status(self):
-        self._status_text.configure(state=tk.NORMAL)
-        self._status_text.delete("1.0", tk.END)
-        self._status_text.insert(tk.END, "Verificando...\n", "dim")
-        self._status_text.configure(state=tk.DISABLED)
         threading.Thread(target=_worker_context, args=(self._result_q,), daemon=True).start()
 
     def _render_status(self, ctx):
-        self._ctx = ctx
-        t = self._status_text
-        t.configure(state=tk.NORMAL)
-        t.delete("1.0", tk.END)
-        if "error" in ctx:
-            t.insert(tk.END, f"Erro: {ctx['error']}\n", "off")
-            t.configure(state=tk.DISABLED)
-            return
-
         gemini = ctx.get("llm_gemini", False)
-        groq   = ctx.get("llm_groq", False)
-        llm_ok = ctx.get("llm_available", False)
-
-        t.insert(tk.END, "Python: ", "label")
-        t.insert(tk.END, f"{ctx.get('python', 'missing')}\n", "ok" if ctx.get("python") else "off")
-        t.insert(tk.END, "Workspace: ", "label")
-        t.insert(tk.END, f"{ctx.get('root', '-')}\n", "ok" if ctx.get("workspace") else "off")
-        t.insert(tk.END, "Git: ", "label")
-        t.insert(tk.END, f"{'repo ativo' if ctx.get('is_git_repo') else 'sem repo'}\n", "dim")
-        t.insert(tk.END, "Memoria store: ", "label")
-        t.insert(tk.END, f"{ctx.get('store_dir', '-')}\n", "ok" if ctx.get("store_dir") else "off")
-        t.insert(tk.END, "\n--- Provedores LLM ---\n", "label")
-        t.insert(tk.END, f"Gemini: ", "label")
-        t.insert(tk.END, f"{'Online' if gemini else 'Offline'}\n", "ok" if gemini else "off")
-        t.insert(tk.END, f"Groq:   ", "label")
-        t.insert(tk.END, f"{'Online' if groq else 'Offline'}\n", "ok" if groq else "off")
-        t.insert(tk.END, f"Router: ", "label")
-        t.insert(tk.END, f"{'ONLINE' if llm_ok else 'OFFLINE (deterministic)'}\n", "ok" if llm_ok else "off")
-        t.configure(state=tk.DISABLED)
+        groq = ctx.get("llm_groq", False)
+        text = (
+            f"Python: {ctx.get('python', '-')}\n"
+            f"Workspace: {ctx.get('root', '-')}\n"
+            f"Gemini: {'Online' if gemini else 'Offline'}\n"
+            f"Groq: {'Online' if groq else 'Offline'}\n"
+            f"Memoria: {ctx.get('store_dir', '-')}\n"
+        )
+        self._status_text.configure(state=tk.NORMAL)
+        self._status_text.delete("1.0", tk.END)
+        self._status_text.insert(tk.END, text)
+        self._status_text.configure(state=tk.DISABLED)
         self._update_header(ctx)
 
     def _update_header(self, ctx):
         gemini = ctx.get("llm_gemini", False)
-        groq   = ctx.get("llm_groq", False)
-        self._status_labels["gemini"].configure(
-            text=f"Gemini: {'Online' if gemini else 'Offline'}",
-            fg=_GREEN if gemini else _RED)
-        self._status_labels["groq"].configure(
-            text=f"Groq: {'Online' if groq else 'Offline'}",
-            fg=_GREEN if groq else _RED)
-        # Memory badge
-        try:
-            from engine.executor.memory import ProjectMemory
-            mem = ProjectMemory(str(_ROOT))
-            has = mem.load().get("updated_at") is not None
-            self._status_labels["memory"].configure(
-                text=f"Memoria: {'Ativa' if has else 'Inativa'}",
-                fg=_GREEN if has else _YELLOW)
-        except Exception:
-            self._status_labels["memory"].configure(text="Memoria: Erro", fg=_RED)
+        groq = ctx.get("llm_groq", False)
+        self._status_labels["gemini"].configure(text=f"Gemini: {'Online' if gemini else 'Offline'}", fg=_GREEN if gemini else _RED)
+        self._status_labels["groq"].configure(text=f"Groq: {'Online' if groq else 'Offline'}", fg=_GREEN if groq else _RED)
+        self._status_labels["memory"].configure(text="Memoria: Ativa", fg=_GREEN)
 
-    # ── Settings view ─────────────────────────────────────────────────────
     def _build_settings_view(self):
-        f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
+        f = tk.Frame(self._content, bg=_BG)
         self._views["settings"] = f
-        tk.Label(f, text="CONFIGURACOES", font=("Segoe UI", 14, "bold"),
-                 fg=_FG, bg=_BG, anchor="w", padx=16, pady=10).pack(fill=tk.X)
+        tk.Label(f, text="CONFIGURACOES", font=("Segoe UI", 14, "bold"), fg=_FG, bg=_BG).pack(anchor="w", padx=16, pady=10)
 
-        inner = tk.Frame(f, bg=_BG, padx=16, pady=8)
-        inner.pack(fill=tk.X)
+        anim_s = _load_anim_settings()
+        anim_frame = tk.Frame(f, bg=_BG3, padx=12, pady=10)
+        anim_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+        self._anim_var = tk.BooleanVar(value=anim_s["enabled"])
+        self._anim_intensity = tk.StringVar(value=anim_s["intensity"])
+        self._anim_reduce = tk.BooleanVar(value=anim_s["reduce"])
+        tk.Checkbutton(anim_frame, text="Animacao de fundo", variable=self._anim_var, command=self._on_anim_changed, fg=_FG, bg=_BG3, selectcolor=_BG2).pack(anchor="w")
+        row = tk.Frame(anim_frame, bg=_BG3); row.pack(anchor="w")
+        for val, label in [("low", "Baixa"), ("medium", "Media"), ("high", "Alta")]:
+            tk.Radiobutton(row, text=label, variable=self._anim_intensity, value=val, command=self._on_anim_changed, fg=_FG, bg=_BG3, selectcolor=_BG2).pack(side=tk.LEFT)
+        tk.Checkbutton(anim_frame, text="Reduzir animacoes", variable=self._anim_reduce, command=self._on_anim_changed, fg=_FG, bg=_BG3, selectcolor=_BG2).pack(anchor="w")
 
         for label, env_var in [("GEMINI_API_KEY", "GEMINI_API_KEY"), ("GROQ_API_KEY", "GROQ_API_KEY")]:
-            tk.Label(inner, text=label + ":", font=("Segoe UI", 11, "bold"),
-                     fg=_FG, bg=_BG).pack(anchor="w", pady=(8, 0))
-            row = tk.Frame(inner, bg=_BG)
-            row.pack(fill=tk.X, pady=2)
-            entry = tk.Entry(row, font=("Consolas", 11), bg=_INPUT_BG, fg=_FG,
-                             insertbackground=_FG, highlightthickness=1,
-                             highlightbackground=_BG3, highlightcolor=_ACCENT,
-                             bd=0, show="*", width=52)
-            entry.pack(side=tk.LEFT, padx=(0, 8))
-            # Store raw value in memory; show placeholder
+            tk.Label(f, text=label + ":", font=("Segoe UI", 11, "bold"), fg=_FG, bg=_BG).pack(anchor="w", padx=16, pady=(8, 0))
+            entry = tk.Entry(f, font=("Consolas", 11), bg=_INPUT_BG, fg=_FG, insertbackground=_FG, bd=0, show="*", width=52)
+            entry.pack(anchor="w", padx=16, pady=2)
             entry.insert(0, _read_env_value(env_var))
-            if not _read_env_value(env_var):
-                entry.configure(fg=_PLACEHOLDER, show="")
-                entry.insert(0, "(vazio)")
-                entry._placeholder = True
-            else:
-                entry._placeholder = False
-
-            test_btn = tk.Button(row, text="Testar", font=("Segoe UI", 10), fg=_FG, bg=_BG3,
-                                 activebackground=_ACCENT, bd=0, padx=10, pady=2,
-                                 command=lambda p=env_var.split("_")[0].lower(): self._test_provider(p))
-            test_btn.pack(side=tk.LEFT)
             setattr(self, f"_entry_{env_var.lower()}", entry)
+        tk.Button(f, text="Salvar chaves", command=self._save_settings, bg=_GREEN, fg="#fff", bd=0).pack(anchor="w", padx=16, pady=12)
+        self._settings_status = tk.Label(f, text="", fg=_FG2, bg=_BG)
+        self._settings_status.pack(anchor="w", padx=16)
 
-        # Save button
-        btn_row = tk.Frame(inner, bg=_BG)
-        btn_row.pack(fill=tk.X, pady=(16, 0))
-        tk.Button(btn_row, text="Salvar chaves", font=("Segoe UI", 11, "bold"),
-                  fg="#fff", bg=_GREEN, activebackground="#269a38",
-                  bd=0, padx=16, pady=6,
-                  command=self._save_settings).pack(side=tk.LEFT)
-        self._settings_status = tk.Label(btn_row, text="", font=("Segoe UI", 10),
-                                         fg=_FG2, bg=_BG)
-        self._settings_status.pack(side=tk.LEFT, padx=12)
+    def _on_anim_changed(self):
+        s = {"enabled": self._anim_var.get(), "intensity": self._anim_intensity.get(), "reduce": self._anim_reduce.get()}
+        _save_anim_settings(s)
+        if self._brain:
+            self._brain.update_settings(s)
 
     def _save_settings(self):
-        entries = {}
-        for env_var in ("GEMINI_API_KEY", "GROQ_API_KEY"):
-            entry: tk.Entry = getattr(self, f"_entry_{env_var.lower()}")
-            val = entry.get().strip()
-            if getattr(entry, "_placeholder", False):
-                val = ""
-            entries[env_var] = val
+        gemini = self._entry_gemini_api_key.get().strip()
+        groq = self._entry_groq_api_key.get().strip()
+        threading.Thread(target=_worker_save_keys, args=(gemini, groq, self._result_q), daemon=True).start()
 
-        threading.Thread(target=_worker_save_keys,
-                         args=(entries["GEMINI_API_KEY"], entries["GROQ_API_KEY"], self._result_q),
-                         daemon=True).start()
-
-    def _test_provider(self, provider: str):
-        self._settings_status.configure(text=f"Testando {provider}...", fg=_YELLOW)
-        threading.Thread(target=_worker_test_provider,
-                         args=(provider, self._result_q), daemon=True).start()
-
-    # ── View switching ────────────────────────────────────────────────────
     def _switch_view(self, key: str):
         for child in self._content.winfo_children():
             child.pack_forget()
-        view = self._views[key]
-        view.pack(fill=tk.BOTH, expand=True)
+        self._views[key].pack(fill=tk.BOTH, expand=True)
         self._current_view.set(key)
-        if key == "memory":
-            self._refresh_memory()
-        elif key == "context":
-            self._refresh_context()
-        elif key == "status":
-            self._refresh_status()
+        if self._brain:
+            if key == "chat": self._brain.resume()
+            else: self._brain.pause()
+        if key == "memory": self._refresh_memory()
+        elif key == "context": self._refresh_context()
+        elif key == "status": self._refresh_status()
 
-    # ── Queue polling ─────────────────────────────────────────────────────
     def _poll_queues(self):
-        # Permission dialog
         try:
             while True:
                 name, payload = self._phase_q.get_nowait()
@@ -679,37 +711,28 @@ class MegaBrainApp:
                     self._show_permission_dialog(payload)
                 elif name in PHASE_LABELS:
                     self._append_chat(f"  {PHASE_LABELS[name]}", "phase")
-                elif name == "done":
-                    pass  # handled via result_q
+                    if self._brain:
+                        self._brain.set_state({
+                            "thinking": _BrainAnimation.THINKING,
+                            "planning": _BrainAnimation.PLANNING,
+                            "executing": _BrainAnimation.EXECUTING,
+                            "validating": _BrainAnimation.THINKING,
+                        }.get(name, _BrainAnimation.IDLE))
         except queue.Empty:
             pass
 
-        # Results
         try:
             while True:
                 kind, data = self._result_q.get_nowait()
-                if kind == "execute":
-                    self._on_execute_done(data)
+                if kind == "execute": self._on_execute_done(data)
                 elif kind == "context":
-                    self._render_context(data)
-                    self._render_status(data)
+                    self._render_context(data); self._render_status(data)
                 elif kind == "save_keys":
-                    if data.get("ok"):
-                        self._settings_status.configure(text="Salvo com sucesso.", fg=_GREEN)
-                        self._load_initial_status()
-                    else:
-                        self._settings_status.configure(text=f"Erro: {data.get('error')}", fg=_RED)
+                    self._settings_status.configure(text="Salvo com sucesso." if data.get("ok") else f"Erro: {data.get('error')}", fg=_GREEN if data.get("ok") else _RED)
                 elif kind == "test_provider":
-                    prov = data.get("provider", "")
-                    if data.get("ok"):
-                        self._settings_status.configure(
-                            text=f"{prov.upper()}: OK ({data.get('elapsed')}s)", fg=_GREEN)
-                    else:
-                        self._settings_status.configure(
-                            text=f"{prov.upper()}: FALHOU — {data.get('error', '')[:80]}", fg=_RED)
+                    pass
         except queue.Empty:
             pass
-
         self.root.after(60, self._poll_queues)
 
     def _on_execute_done(self, data: dict):
@@ -717,80 +740,55 @@ class MegaBrainApp:
         self._input.configure(state=tk.NORMAL)
         self._send_btn.configure(state=tk.NORMAL, text="EXECUTAR")
         success = data.get("success", False)
-        errors = data.get("errors") or []
-        report = data.get("report_markdown", "")
-        planner = data.get("planner", "?")
-
-        if success:
-            self._append_chat("Concluido.", "ok")
-        else:
-            self._append_chat("Erro.", "error")
-
-        self._append_chat(f"Planner: {planner}", "system")
-
-        if errors:
-            self._append_chat("Erros:", "error")
-            for e in errors[:5]:
-                self._append_chat(f"  - {e}", "error")
-        if report:
-            self._append_chat(report, "system")
-        self._append_chat("", "system")
+        if self._brain:
+            self._brain.set_state(_BrainAnimation.COMPLETED if success else _BrainAnimation.ERROR)
+        self._append_chat("Concluido." if success else "Erro.", "ok" if success else "error")
+        for e in (data.get("errors") or [])[:5]:
+            self._append_chat(f"  - {e}", "error")
+        if data.get("report_markdown"):
+            self._append_chat(data["report_markdown"], "system")
 
     def _show_permission_dialog(self, payload: dict):
         reason = payload.get("reason", "Acao perigosa detectada")
-        ev = payload.get("event")
-        holder = payload.get("holder")
+        ev = payload.get("event"); holder = payload.get("holder")
         if ev is None or holder is None:
             return
-
-        dlg = tk.Toplevel(self.root)
-        dlg.title("Acao requer autorizacao")
-        dlg.configure(bg=_BG2)
-        dlg.geometry("480x220")
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        tk.Label(dlg, text="Acao requer autorizacao", font=("Segoe UI", 14, "bold"),
-                 fg=_YELLOW, bg=_BG2, pady=12).pack()
-        tk.Label(dlg, text=reason[:200], font=("Segoe UI", 10),
-                 fg=_FG, bg=_BG2, wraplength=440, padx=16, pady=8).pack()
-
-        btn_row = tk.Frame(dlg, bg=_BG2)
-        btn_row.pack(pady=12)
-
+        dlg = tk.Toplevel(self.root); dlg.title("Acao requer autorizacao"); dlg.configure(bg=_BG2); dlg.geometry("480x220"); dlg.transient(self.root); dlg.grab_set()
+        tk.Label(dlg, text="Acao requer autorizacao", font=("Segoe UI", 14, "bold"), fg=_YELLOW, bg=_BG2, pady=12).pack()
+        tk.Label(dlg, text=reason[:200], font=("Segoe UI", 10), fg=_FG, bg=_BG2, wraplength=440, padx=16, pady=8).pack()
+        row = tk.Frame(dlg, bg=_BG2); row.pack(pady=12)
         def answer(v):
-            holder[0] = v
-            ev.set()
-            dlg.destroy()
+            holder[0] = v; ev.set(); dlg.destroy()
+        tk.Button(row, text="CANCELAR", command=lambda: answer(False), bg=_BG3, fg=_FG, bd=0, padx=20, pady=6).pack(side=tk.LEFT, padx=8)
+        tk.Button(row, text="AUTORIZAR", command=lambda: answer(True), bg=_GREEN, fg="#fff", bd=0, padx=20, pady=6).pack(side=tk.LEFT, padx=8)
 
-        tk.Button(btn_row, text="CANCELAR", font=("Segoe UI", 11), fg=_FG, bg=_BG3,
-                  activebackground=_RED, bd=0, padx=20, pady=6,
-                  command=lambda: answer(False)).pack(side=tk.LEFT, padx=8)
-        tk.Button(btn_row, text="AUTORIZAR", font=("Segoe UI", 11, "bold"), fg="#fff", bg=_GREEN,
-                  activebackground="#269a38", bd=0, padx=20, pady=6,
-                  command=lambda: answer(True)).pack(side=tk.LEFT, padx=8)
+    def _on_unmap(self, event):
+        if event.widget == self.root and self._brain and self.root.state() == "iconic": self._brain.pause()
 
-    # ── Initial load ──────────────────────────────────────────────────────
+    def _on_map(self, event):
+        if event.widget == self.root and self._brain and self._current_view.get() == "chat": self._brain.resume()
+
+    def _on_focus_in(self, event):
+        if event.widget == self.root and self._brain: self._brain.focus_in()
+
+    def _on_focus_out(self, event):
+        if event.widget == self.root and self._brain: self._brain.focus_out()
+
     def _load_initial_status(self):
         threading.Thread(target=_worker_context, args=(self._result_q,), daemon=True).start()
 
     def _on_close(self):
-        if self._running:
-            if not messagebox.askokcancel("Sair", "Uma tarefa esta em execucao. Deseja sair mesmo?"):
-                return
+        if self._brain: self._brain.stop()
+        if self._running and not messagebox.askokcancel("Sair", "Uma tarefa esta em execucao. Deseja sair mesmo?"):
+            return
         self.root.destroy()
 
     def run(self):
         self.root.mainloop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Entry
-# ═════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
     else:
-        app = MegaBrainApp()
-        app.run()
+        MegaBrainApp().run()
