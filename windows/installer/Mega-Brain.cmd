@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  Mega Brain - Windows launcher
-rem  Opens the reference-matched animated desktop interface via pythonw.exe.
+rem  Opens the latest animated desktop interface via pythonw.exe.
 rem  Falls back to earlier UIs only if the latest entrypoint is missing.
 rem  NEVER prints secret values.
 rem ============================================================
@@ -45,7 +45,8 @@ if /i not "%PYEXE:~-7%"=="pythonw" (
 )
 if not defined PYWEXE set "PYWEXE=%PYEXE%"
 
-set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v3.pyw"
+set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v4.pyw"
+if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v3.pyw"
 if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v2.pyw"
 if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui.pyw"
 start "" "%PYWEXE%" "%UI%" %*
