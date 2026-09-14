@@ -23,12 +23,10 @@ raises for permission issues — the gate decides, the executor records.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from engine.executor.permissions import PermissionGate
@@ -233,25 +231,30 @@ class ScopedTools:
         }
 
     def run_tests(self, *, timeout: int = 600) -> dict:
-        """Auto-detect and run the workspace test suite (pytest or npm test)."""
-        if (self.workspace / "package.json").is_file():
-            result = self.run("npm.cmd test", timeout=timeout)
-            if result.get("ok") and "test" in _pkg_json(self.workspace):
-                return result
-            # fall through to pytest detection if npm run is not configured
-        tests_dir = self.workspace / "tests"
-        has_pytest = any(
-            (self.workspace / cfg).is_file()
-            for cfg in ("pytest.ini", "pyproject.toml", "tox.ini", "conftest.py")
-        )
-        target = tests_dir if tests_dir.is_dir() else self.workspace
-        command = f'py -3 -m pytest -q --tb=short "{target}"'
+        """Run the detected suite: npm test when declared, else pytest.
+
+        A failing ``npm test`` is reported as the failure — it is NEVER
+        silently replaced by a pytest run (that would mask a red suite).
+        """
+        from engine.executor.test_runner import npm_runner, pytest_command
+
+        npm = npm_runner(self.workspace)
+        if npm:
+            result = self.run(npm, timeout=timeout)
+            result["runner"] = "npm"
+            return result
+        command = pytest_command(self.workspace)
+        if command is None:
+            return {
+                "ok": False,
+                "error": "no test runner available: no npm test script and no python launcher found",
+            }
         result = self.run(command, timeout=timeout)
         if result.get("blocked"):
             return result
         if result.get("ok"):
-            summary = _pytest_summary(result)
-            result["summary"] = summary
+            result["summary"] = _pytest_summary(result)
+            result["runner"] = "pytest"
         return result
 
     def git(self, subcommand: str, *args: str) -> dict:
@@ -332,13 +335,6 @@ def _pytest_summary(result: dict) -> int:
     tail = result.get("stdout", "") + result.get("stderr", "")
     m = re.search(r"(\d+) passed", tail)
     return int(m.group(1)) if m else None
-
-
-def _pkg_json(workspace: Path) -> dict:
-    try:
-        return json.loads((workspace / "package.json").read_text(_ENCODING))
-    except Exception:
-        return {}
 
 
 __all__ = ["ScopedTools", "_TEXT_SUFFIXES"]

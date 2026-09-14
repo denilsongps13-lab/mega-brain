@@ -45,7 +45,9 @@ def test_resume_from_memory(tmp_path):
 
 def test_pytest_dir_detected(tmp_path):
     (tmp_path / "tests").mkdir()
-    assert detect_test_command(tmp_path) == "py -3 -m pytest -q"
+    from engine.executor.test_runner import python_launcher
+
+    assert detect_test_command(tmp_path) == " ".join(python_launcher()) + " -m pytest -q"
 
 
 def test_no_test_detected(tmp_path):

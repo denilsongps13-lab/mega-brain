@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { resolvePythonCmd } from './lib/python-cmd.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,7 +42,8 @@ const NC = '\x1b[0m';
  */
 function getPackFiles(projectRoot) {
   try {
-    const packOutput = execSync('npm pack --dry-run --json 2>/dev/null', {
+    const nullDev = process.platform === 'win32' ? '2>nul' : '2>/dev/null';
+    const packOutput = execSync(`npm pack --dry-run --json ${nullDev}`, {
       cwd: projectRoot,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -85,7 +87,6 @@ print(json.dumps(results))
   const tmpFile = join(tmpdir(), `validate-package-${process.pid}.py`);
   try {
     writeFileSync(tmpFile, pythonScript, 'utf-8');
-    const { resolvePythonCmd } = await import('./lib/python-cmd.js');
     const pythonCmd = resolvePythonCmd();
     if (!pythonCmd) {
       throw new Error('Python 3 não detectado (python3/python/py -3). Rode `mega-brain doctor`.');

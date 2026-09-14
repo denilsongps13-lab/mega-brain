@@ -34,18 +34,9 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 def detect_test_command(workspace: Path) -> str | None:
-    if (workspace / "package.json").is_file():
-        try:
-            import json as _json
+    from engine.executor.test_runner import detect_test_command as _detect
 
-            pkg = _json.loads((workspace / "package.json").read_text(encoding="utf-8"))
-            if pkg.get("scripts", {}).get("test"):
-                return "npm.cmd test"
-        except Exception:
-            pass
-    if (workspace / "tests").is_dir() or (workspace / "pytest.ini").exists():
-        return "py -3 -m pytest -q"
-    return None
+    return _detect(workspace)
 
 
 def load_project_context(
