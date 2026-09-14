@@ -1,18 +1,14 @@
-"""Tests for the TaskExecutor flow: plan -> execute -> validate -> remember.
-
-Covered: clean manual run, failing/blocked step -> next_steps + errors, the
-same-cause retry cap (max_attempts, no infinite loop), tests-based validation,
-and memory state transitions (objective rotation, session end).
-"""
+"""Tests for the TaskExecutor flow: plan -> execute -> validate -> remember."""
 from __future__ import annotations
 
-import pytest
+import json
 
 from engine.executor.executor import TaskExecutor, execute_objective
 
 
 class StubPlanner:
     kind = "stub"
+
     def __init__(self, steps, validation="manual"):
         self.steps = steps
         self.validation = validation
@@ -33,35 +29,30 @@ def test_clean_manual_run(tmp_path):
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "hi"
     assert res["validation"]["kind"] == "manual"
     state = res["memory"]
-    assert state["current_objective"] is None  # ended cleanly
+    assert state["current_objective"] is None
     assert state["last_objective"] == "draft a note"
     assert state["completed"][-1]["task"] == "draft a note"
 
 
 def test_blocked_step_marks_run_not_clean(tmp_path):
-    stub = StubPlanner(
-        [{"action": "write", "params": {"path": ".env", "content": "SECRET=1"}}]
-    )
+    stub = StubPlanner([{"action": "write", "params": {"path": ".env", "content": "SECRET=1"}}])
     res = execute_objective("edit env", workspace=str(tmp_path), planner=stub)
     assert res["success"] is False
     step = res["steps"][0]
     assert step["blocked"] is True
     assert res["errors"]
     assert res["next_steps"]
-    # .env untouched
     assert not (tmp_path / ".env").exists()
     assert res["memory"]["current_objective"] == "edit env"
 
 
 def test_retry_capped_on_same_cause(tmp_path):
     (tmp_path / "f.txt").write_text("abc", encoding="utf-8")
-    stub = StubPlanner(
-        [{"action": "edit", "params": {"path": "f.txt", "old": "zz", "new": "xx"}}]
-    )
+    stub = StubPlanner([{"action": "edit", "params": {"path": "f.txt", "old": "zz", "new": "xx"}}])
     executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=3)
     res = executor.run("fix f")
     attempts = [r for r in res["steps"] if r["step_id"] == "s1"]
-    assert len(attempts) == 3  # same-cause retry capped
+    assert len(attempts) == 3
     assert attempts[-1]["ok"] is False
     assert res["success"] is False
 
@@ -83,7 +74,7 @@ def test_transient_failure_recovered_by_retry__run_is_clean(tmp_path):
     assert len(attempts) == 2
     assert attempts[0]["ok"] is False
     assert attempts[1]["ok"] is True
-    assert res["errors"] == []  # transient retry that recovered is NOT an error
+    assert res["errors"] == []
     assert res["success"] is True
     assert res["validation"]["ok"] is True
     assert res["next_steps"] == []
@@ -91,13 +82,10 @@ def test_transient_failure_recovered_by_retry__run_is_clean(tmp_path):
 
 def test_tests_validation_requires_green(tmp_path):
     (tmp_path / "test_a.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    stub = StubPlanner(
-        [
-            {"action": "write", "params": {"path": "x.txt", "content": "1"}},
-            {"action": "run_tests", "params": {}},
-        ],
-        validation="tests",
-    )
+    stub = StubPlanner([
+        {"action": "write", "params": {"path": "x.txt", "content": "1"}},
+        {"action": "run_tests", "params": {}},
+    ], validation="tests")
     res = execute_objective("ensure green", workspace=str(tmp_path), planner=stub)
     assert res["validation"]["kind"] == "tests"
     assert res["validation"]["ok"] is True
@@ -105,10 +93,7 @@ def test_tests_validation_requires_green(tmp_path):
 
 
 def test_tests_validation_fails_when_no_test_step_ran(tmp_path):
-    stub = StubPlanner(
-        [{"action": "write", "params": {"path": "x.txt", "content": "1"}}],
-        validation="tests",
-    )
+    stub = StubPlanner([{"action": "write", "params": {"path": "x.txt", "content": "1"}}], validation="tests")
     res = execute_objective("untested", workspace=str(tmp_path), planner=stub)
     assert res["validation"]["kind"] == "tests"
     assert res["validation"]["ok"] is False
@@ -116,13 +101,9 @@ def test_tests_validation_fails_when_no_test_step_ran(tmp_path):
 
 
 def test_deterministic_planner_full_run_no_api(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "engine.intelligence.pipeline.mce.llm_router.is_provider_available", lambda p: False
-    )
+    monkeypatch.setattr("engine.intelligence.pipeline.mce.llm_router.is_provider_available", lambda p: False)
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_it.py").write_text(
-        "def test_passes():\n    assert 1 == 1\n", encoding="utf-8"
-    )
+    (tmp_path / "tests" / "test_it.py").write_text("def test_passes():\n    assert 1 == 1\n", encoding="utf-8")
     executor = TaskExecutor(str(tmp_path))
     res = executor.run("Inspect project and run the tests")
     assert res["planner"] == "deterministic"
@@ -135,7 +116,7 @@ def test_resume_without_objective(tmp_path):
     executor = TaskExecutor(str(tmp_path))
     executor.run("primary objective")
     resumed = TaskExecutor(str(tmp_path)).run()
-    assert resumed["objective"] == "primary objective"  # continues from memory
+    assert resumed["objective"] == "primary objective"
 
 
 def test_context_step_produces_info(tmp_path):
@@ -143,3 +124,30 @@ def test_context_step_produces_info(tmp_path):
     res = execute_objective("dive", workspace=str(tmp_path), planner=stub)
     assert res["success"] is True
     assert res["steps"][0]["action"] == "context"
+
+
+def test_failed_command_keeps_real_diagnostics_and_persists_jsonl(tmp_path):
+    stub = StubPlanner([{"action": "run", "params": {"command": "python -c \"import sys; print('OUT'); print('ERR', file=sys.stderr); sys.exit(7)\""}}])
+    executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=1)
+    res = executor.run("capture diagnostics")
+    step = res["steps"][0]
+    assert res["success"] is False
+    assert step["exit_code"] == 7
+    assert "OUT" in step["stdout"]
+    assert "ERR" in step["stderr"]
+    assert "ERR" in step["error"]
+    log_path = executor.execution_log
+    assert log_path.exists()
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["exit_code"] == 7
+    assert "ERR" in rows[-1]["stderr"]
+
+
+def test_execution_log_redacts_sensitive_assignments(tmp_path):
+    stub = StubPlanner([{"action": "run", "params": {"command": "python -c \"print('GEMINI_API_KEY=supersecret')\""}}])
+    executor = TaskExecutor(str(tmp_path), planner=stub, max_attempts=1)
+    res = executor.run("redact secrets")
+    assert res["success"] is True
+    text = executor.execution_log.read_text(encoding="utf-8")
+    assert "supersecret" not in text
+    assert "<redacted>" in text
