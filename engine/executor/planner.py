@@ -119,6 +119,7 @@ class LLMPlanner(Planner):
                 ("last_commit", context.get("last_commit")),
                 ("dirty_files", context.get("dirty_files")),
                 ("test_command", context.get("test_command")),
+                ("execution_log", context.get("execution_log")),
                 ("llm_gemini", context.get("llm_gemini")),
                 ("llm_groq", context.get("llm_groq")),
                 ("next_steps", context.get("resume", {}).get("next_steps")),

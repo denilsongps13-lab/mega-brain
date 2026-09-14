@@ -25,12 +25,18 @@ jobs:
           npm ci --ignore-scripts
       - name: Complete Python suite
         run: python -m pytest tests/python -q
-      - name: Executor and GUI selftests
+      - name: Executor selftest
+        timeout-minutes: 2
         run: |
           python windows/ui/megabrain-ui.pyw --selftest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real Tk GUI selftest
+        timeout-minutes: 2
+        run: |
           python scripts/validate_desktop_gui.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Node smoke
+        run: |
           node tests/reputacao-smoke.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build installer from tested commit

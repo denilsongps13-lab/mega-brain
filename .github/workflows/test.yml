@@ -49,6 +49,7 @@ jobs:
         with:
           name: coverage-report
           path: .coverage
+          include-hidden-files: true
           retention-days: 7
 
   secrets-scan:

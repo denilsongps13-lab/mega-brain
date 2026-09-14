@@ -217,6 +217,8 @@ class TaskExecutor:
                 **{k: raw.get(k) for k in ("path", "exit_code", "count", "summary") if raw.get(k) is not None},
             }
             record = self.journal.append(record)
+            if action == "diagnostics":
+                record["diagnostics"] = raw.get("records", [])
             records.append(record)
             if ok or raw.get("blocked"):
                 break

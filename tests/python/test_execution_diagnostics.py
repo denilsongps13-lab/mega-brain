@@ -53,3 +53,12 @@ def test_timeout_preserves_partial_output(tmp_path, monkeypatch):
 def test_credential_file_read_is_blocked(tmp_path):
     executor = TaskExecutor(str(tmp_path), store_root=str(tmp_path / 'store'))
     assert executor.tools.read('.env')['blocked']
+
+
+def test_diagnostics_are_returned_to_the_user(tmp_path):
+    executor = TaskExecutor(str(tmp_path), store_root=str(tmp_path / 'store'), max_attempts=1)
+    executor._execute_step_retry({'id': 'missing', 'action': 'read', 'params': {'path': 'absent.txt'}})
+    record = executor._execute_step_retry({'id': 'diagnose', 'action': 'diagnostics'})[0]
+    assert 'file not found' in record['diagnostics'][0]['error']
+    assert 'diagnostics' not in json.loads(executor.journal.path.read_text().splitlines()[-1])
+    assert redact({'path': '.env', 'content': 'UNLABELLED=private-value'})['content'] == '[REDACTED]'

@@ -17,7 +17,8 @@ _LOCK = threading.Lock()
 def redact(value):
     """Redact structured secrets, labelled text, and loaded credential values."""
     if isinstance(value, dict):
-        return {str(k): '[REDACTED]' if _SECRET.search(str(k)) else redact(v)
+        sensitive_file = any(part == '.env' or part.startswith('.env.') for part in str(value.get('path', '')).replace('\\', '/').split('/'))
+        return {str(k): '[REDACTED]' if _SECRET.search(str(k)) or (sensitive_file and k in ('content', 'old', 'new', 'stdout', 'stderr')) else redact(v)
                 for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]

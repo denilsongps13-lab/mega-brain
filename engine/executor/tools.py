@@ -229,6 +229,7 @@ class ScopedTools:
         stderr = (proc.stderr or "")[-6000:]
         return {
             "ok": proc.returncode == 0,
+            "runner": argv[0],
             "exit_code": proc.returncode,
             "command": command,
             "stdout": stdout,
