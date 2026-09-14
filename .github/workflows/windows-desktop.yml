@@ -1,0 +1,71 @@
+name: Windows desktop validation
+on:
+  push:
+    branches: [main, fix/desktop-diagnostics]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest
+          npm ci --ignore-scripts
+      - name: Complete Python suite
+        run: python -m pytest tests/python -q
+      - name: Executor and GUI selftests
+        run: |
+          python windows/ui/megabrain-ui.pyw --selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/validate_desktop_gui.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/reputacao-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build installer from tested commit
+        run: npm run build:installer
+      - name: Verify packaged source matches tested source
+        shell: python
+        run: |
+          from pathlib import Path
+          root = Path.cwd()
+          for folder in ('windows/ui', 'engine/executor'):
+              for source in (root / folder).glob('*.py*'):
+                  packaged = root / 'windows/installer/staging' / source.relative_to(root)
+                  assert source.read_bytes() == packaged.read_bytes(), str(source)
+          payload = root / 'windows/installer/staging'
+          for forbidden in ('.env', '.data', '.claude/mission-control'):
+              assert not (payload / forbidden).exists(), forbidden
+      - name: Upgrade preserves synthetic local data
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'Mega Brain upgrade smoke'
+          $payload = Join-Path $target 'mega-brain'
+          New-Item -ItemType Directory -Force "$payload/.data/megabrain" | Out-Null
+          Set-Content "$payload/.env" 'GEMINI_API_KEY=synthetic-installer-sentinel'
+          Set-Content "$payload/.data/megabrain/ui-animation.json" '{"enabled":false,"intensity":"Low","reduce":true}'
+          $envHash = (Get-FileHash "$payload/.env").Hash
+          $settingsHash = (Get-FileHash "$payload/.data/megabrain/ui-animation.json").Hash
+          $env:MB_INSTALLER_SKIP_BOOTSTRAP = '1'
+          foreach ($attempt in 1..2) {
+            $process = Start-Process 'dist/Mega-Brain-Setup-x64.exe' -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+            if ((Get-FileHash "$payload/.env").Hash -ne $envHash) { throw '.env changed' }
+            if ((Get-FileHash "$payload/.data/megabrain/ui-animation.json").Hash -ne $settingsHash) { throw 'Settings changed' }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mega-Brain-Setup-x64
+          path: dist/Mega-Brain-Setup-x64.exe
+          if-no-files-found: error

@@ -36,7 +36,7 @@ PLAN_SCHEMA: dict = {
                         "type": "string",
                         "enum": [
                             "read", "write", "edit", "search", "glob",
-                            "run", "run_tests", "mkdir", "delete", "git_status",
+                            "run", "run_tests", "mkdir", "delete", "git_status", "diagnostics",
                         ],
                     },
                     "params": {"type": "object"},
@@ -54,7 +54,8 @@ _PLAN_PROMPT = """You are the Mega Brain local task planner. Given a human objec
 
 Constraints:
 - Keep it to 3-6 steps. No destructive actions.
-- Actions available: read, write, edit, search, glob, run, run_tests, mkdir, git_status.
+- Actions available: read, write, edit, search, glob, run, run_tests, mkdir, git_status, diagnostics.
+- To diagnose failures use diagnostics (no params). It reads the canonical execution journal. Never guess execution.log.
 - params must be simple strings (path, pattern, command, old, new, content).
 - If the objective involves fixing tests, ALWAYS include run_tests and use it as validation.
 - validation is "tests" when you can verify by running the test suite, else "manual".

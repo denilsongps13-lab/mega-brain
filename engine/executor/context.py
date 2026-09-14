@@ -92,6 +92,8 @@ def load_project_context(
         "llm_groq": llm_groq,
         "workspace": str(root),
         "store_dir": str(memory.dir),
+        "execution_log": str(memory.dir / "execution.jsonl"),
+        "execution_diagnostics_action": "diagnostics",
         "memory": state,
         "last_events": events,
         "resume": {
