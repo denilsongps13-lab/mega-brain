@@ -1,1 +1,0 @@
-Temporary integration marker: the animated megabrain-ui.pyw uploaded by the user is preserved outside GitHub and is being integrated into branch feat/animated-brain-exec-diagnostics. This marker can be removed after the GUI file is committed.
