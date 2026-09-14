@@ -19,6 +19,8 @@ Flow for ``run(objective)``:
 from __future__ import annotations
 
 import logging
+import uuid
+from engine.executor.diagnostics import ExecutionJournal, redact, failure_reason
 from typing import Any, Callable
 
 from engine.executor.context import load_project_context
@@ -58,7 +60,10 @@ class TaskExecutor:
         self.tools = ScopedTools(self.workspace, gate=self.gate)
         self.planner = planner
         self.memory = ProjectMemory(self.workspace, store_root=store_root)
-        self.max_attempts = max(1, int(max_attempts))
+        self.journal = ExecutionJournal(self.memory.dir)
+        self.session_id = uuid.uuid4().hex
+        self.task_id = uuid.uuid4().hex
+        self.max_attempts = min(3, max(1, int(max_attempts)))
         self.phase_observer = phase_observer
 
     # ---------------------------------------------------------------- phases
@@ -78,6 +83,7 @@ class TaskExecutor:
 
     # ------------------------------------------------------------------ main
     def run(self, objective: str | None = None) -> dict:
+        self.task_id = uuid.uuid4().hex
         context = load_project_context(self.workspace, store_root=self.store_root)
         resume = context.get("resume", {})
         if not objective:
@@ -95,7 +101,7 @@ class TaskExecutor:
         except Exception as exc:  # planner must never break the run
             from engine.executor.planner import DeterministicPlanner
 
-            logger.warning("planner raised (%s) — falling back to deterministic", exc)
+            logger.warning("planner raised (%s) — falling back to deterministic", redact(str(exc)))
             plan = DeterministicPlanner().plan(objective, context)
 
         step_records: list[dict] = []
@@ -153,6 +159,9 @@ class TaskExecutor:
             "permission_mode": self.gate.mode,
             "max_attempts": self.max_attempts,
             "memory_dir": str(self.memory.dir),
+            "execution_log": str(self.journal.path),
+            "task_id": self.task_id,
+            "session_id": self.session_id,
         }
 
         summary = build_report(result, context)
@@ -183,8 +192,21 @@ class TaskExecutor:
                 raw = self._run_step(action, params)
             except Exception as exc:
                 raw = {"ok": False, "error": str(exc)}
+            raw = redact(raw)
+            if not raw.get("ok"):
+                raw["error"] = failure_reason(raw)
             ok, reason = validate_step(step, raw)
             record = {
+                "task_id": self.task_id,
+                "session_id": self.session_id,
+                "tool": action,
+                "command": raw.get("command", params.get("command")),
+                "params": redact(params),
+                "runner": raw.get("runner"),
+                "timeout": raw.get("timeout", False),
+                "timeout_seconds": params.get("timeout", 600 if action == "run_tests" else 120) if action in ("run", "run_tests") else None,
+                "stdout": raw.get("stdout", ""),
+                "stderr": raw.get("stderr", ""),
                 "step_id": step_id,
                 "action": action,
                 "attempt": attempts,
@@ -194,6 +216,9 @@ class TaskExecutor:
                 "reason": reason if not ok else None,
                 **{k: raw.get(k) for k in ("path", "exit_code", "count", "summary") if raw.get(k) is not None},
             }
+            record = self.journal.append(record)
+            if action == "diagnostics":
+                record["diagnostics"] = raw.get("records", [])
             records.append(record)
             if ok or raw.get("blocked"):
                 break
@@ -211,6 +236,8 @@ class TaskExecutor:
 
     def _run_step(self, action: str, params: dict) -> dict:
         """Dispatch a single plan step to the scoped tools."""
+        if action == "diagnostics":
+            return {"ok": True, "path": str(self.journal.path), "records": self.journal.recent()}
         if action == "context":
             return {"ok": True, "info": load_project_context(self.workspace, store_root=self.store_root)}
         if action == "read":

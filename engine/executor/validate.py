@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from engine.executor.diagnostics import failure_reason
 
 
 def validate_step(step: dict, result: dict) -> tuple[bool, str | None]:
@@ -15,7 +16,7 @@ def validate_step(step: dict, result: dict) -> tuple[bool, str | None]:
     if result.get("blocked"):
         return (False, f"blocked: {result.get('reason')}")
     if not result.get("ok"):
-        return (False, str(result.get("error") or "tool reported failure"))
+        return (False, failure_reason(result))
     if step.get("action") == "run_tests":
         if result.get("exit_code") not in (0, None):
             return (False, "test suite returned non-zero exit code")

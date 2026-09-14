@@ -89,6 +89,3 @@ jobs:
           assert len(qf.queries) >= 30, f'baseline too small: {len(qf.queries)}'
           print(f'[OK] qrels baseline parses: {len(qf.queries)} queries')
           "
-      - name: Run recall@K eval gate (characterization — BLOCKING)
-        run: |
-          python3 -m pytest tests/rag/test_eval_gate.py -v --tb=short

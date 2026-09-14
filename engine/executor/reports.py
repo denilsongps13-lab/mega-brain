@@ -22,6 +22,10 @@ def build_report(result: dict, context: dict) -> str:
             f"- `{step.get('step_id')}` [{status}] {step.get('action')}"
             + (f" :: {step.get('error') or step.get('reason') or ''}" if status != "OK" else "")
         )
+        if step.get("action") == "diagnostics":
+            for entry in step.get("diagnostics", []):
+                if not entry.get("ok"):
+                    lines.append(f"  - {entry.get('timestamp')} {entry.get('action')} attempt={entry.get('attempt')} exit={entry.get('exit_code')}: {entry.get('error')}")
     touched = [
         s.get("path")
         for s in result.get("steps", [])
@@ -40,6 +44,7 @@ def build_report(result: dict, context: dict) -> str:
         lines.append("## Next steps")
         lines += [f"- {n}" for n in result["next_steps"][:10]]
     lines.append("")
+    lines.append(f"**Execution log:** `{result.get('execution_log')}`")
     lines.append(f"**Memory:** `{result.get('memory_dir')}`")
     lines.append(f"**Tokens:** up to {result.get('max_attempts')} attempts per failure, "
                  "permission mode " + str(result.get("permission_mode")))

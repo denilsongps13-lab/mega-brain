@@ -2,6 +2,7 @@
 Pure stdlib, no network.
 """
 import os
+import pytest
 import tempfile
 from pathlib import Path
 
@@ -33,16 +34,20 @@ def test_flock_on_windows_is_noop_or_works():
             os.close(fd)
 
 
-def test_flock_shared_lock():
+def test_exclusive_lock_contends_then_releases():
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "lock-test2.txt"
         p.write_text("y", encoding="utf-8")
         fd = os.open(str(p), os.O_RDWR)
         try:
             flock(fd, LOCK_EX)
-            # Locking a second fd (same process) works on both platforms.
+            # Independent opens contend on POSIX; Windows currently documents a no-op.
             fd2 = os.open(str(p), os.O_RDWR)
             try:
+                if os.name != "nt":
+                    with pytest.raises(BlockingIOError):
+                        flock(fd2, LOCK_EX | LOCK_NB)
+                flock(fd, LOCK_UN)
                 flock(fd2, LOCK_EX | LOCK_NB)
                 flock(fd2, LOCK_UN)
             finally:

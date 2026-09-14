@@ -51,6 +51,8 @@ class ScopedTools:
         resolved = self.gate.resolve(str(path))
         if resolved is None:
             return {"ok": False, "blocked": True, "reason": "path escapes workspace"}
+        if resolved.name == ".env" or resolved.name.startswith(".env."):
+            return {"ok": False, "blocked": True, "reason": "credential file cannot be read"}
         if not resolved.is_file():
             return {"ok": False, "error": f"file not found: {resolved.relative_to(self.workspace)}"}
         try:
@@ -216,14 +218,18 @@ class ScopedTools:
                 shell=False,
                 creationflags=creationflags,
             )
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": f"command timed out after {timeout}s", "timeout": True}
+        except subprocess.TimeoutExpired as exc:
+            def text(value):
+                return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+            return {"ok": False, "error": f"command timed out after {timeout}s", "timeout": True,
+                    "command": command, "exit_code": None, "stdout": text(exc.stdout), "stderr": text(exc.stderr)}
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
         stdout = (proc.stdout or "")[-6000:]
         stderr = (proc.stderr or "")[-6000:]
         return {
             "ok": proc.returncode == 0,
+            "runner": argv[0],
             "exit_code": proc.returncode,
             "command": command,
             "stdout": stdout,
@@ -252,6 +258,7 @@ class ScopedTools:
         result = self.run(command, timeout=timeout)
         if result.get("blocked"):
             return result
+        result["runner"] = "pytest"
         if result.get("ok"):
             result["summary"] = _pytest_summary(result)
             result["runner"] = "pytest"

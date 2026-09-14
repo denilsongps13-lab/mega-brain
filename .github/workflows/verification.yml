@@ -27,7 +27,9 @@ jobs:
         # pytest-asyncio is required to run the async tests in test_pipeline/
         # (test_concurrency_safety, test_parallel_execution) — without it pytest
         # reports "async def functions are not natively supported" and fails them.
-        run: pip install ruff pyyaml pytest transitions fastapi uvicorn langgraph pytest-timeout pytest-asyncio
+        run: |
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-timeout pytest-asyncio
 
       # path corrected core/ -> engine/ (core/ renamed long ago). Non-blocking
       # to surface pre-existing engine/ lint debt without forcing a mass

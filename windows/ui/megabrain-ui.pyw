@@ -260,6 +260,10 @@ class MegaBrainApp:
         self._ctx: dict[str, Any] = {}
         self._status_labels: dict[str, tk.Label] = {}
 
+        from engine import paths
+        from neural_brain import load_settings
+        self._animation_path = paths.DATA / "megabrain" / "ui-animation.json"
+        self._animation_settings = load_settings(self._animation_path)
         self._build_ui()
         self.root.after(100, self._poll_queues)
         self.root.after(500, self._load_initial_status)
@@ -322,7 +326,11 @@ class MegaBrainApp:
         f = tk.Frame(self._content, bg=_BG, bd=0, highlightthickness=0)
         self._views["chat"] = f
 
-        self._chat_text = tk.Text(f, bg=_BG, fg=_FG, insertbackground=_FG,
+        from neural_brain import NeuralBrain
+        self._brain_canvas = tk.Canvas(f, bg=_BG, height=240, highlightthickness=0)
+        self._brain_canvas.pack(fill=tk.X)
+        self._brain = NeuralBrain(self._brain_canvas, self._animation_settings)
+        self._chat_text = tk.Text(f, height=8, bg=_BG, fg=_FG, insertbackground=_FG,
                                   font=("Consolas", 11), wrap=tk.WORD,
                                   state=tk.DISABLED, padx=12, pady=12,
                                   highlightthickness=0, bd=0,
@@ -601,6 +609,21 @@ class MegaBrainApp:
         inner = tk.Frame(f, bg=_BG, padx=16, pady=8)
         inner.pack(fill=tk.X)
 
+        from neural_brain import save_settings
+        enabled = tk.BooleanVar(value=self._animation_settings['enabled'])
+        reduced = tk.BooleanVar(value=self._animation_settings['reduce'])
+        intensity = tk.StringVar(value=self._animation_settings['intensity'])
+        def update_animation(*_):
+            self._animation_settings.update(enabled=enabled.get(), reduce=reduced.get(), intensity=intensity.get())
+            save_settings(self._animation_path, self._animation_settings)
+        tk.Checkbutton(inner, text="Animacao neural", variable=enabled, command=update_animation,
+                       bg=_BG, fg=_FG, selectcolor=_BG3).pack(anchor="w")
+        tk.Checkbutton(inner, text="Reduce animations", variable=reduced, command=update_animation,
+                       bg=_BG, fg=_FG, selectcolor=_BG3).pack(anchor="w")
+        ttk.Combobox(inner, textvariable=intensity, values=("Low", "Medium", "High"),
+                     state="readonly", width=12).pack(anchor="w")
+        intensity.trace_add("write", update_animation)
+
         for label, env_var in [("GEMINI_API_KEY", "GEMINI_API_KEY"), ("GROQ_API_KEY", "GROQ_API_KEY")]:
             tk.Label(inner, text=label + ":", font=("Segoe UI", 11, "bold"),
                      fg=_FG, bg=_BG).pack(anchor="w", pady=(8, 0))
@@ -662,6 +685,7 @@ class MegaBrainApp:
         view = self._views[key]
         view.pack(fill=tk.BOTH, expand=True)
         self._current_view.set(key)
+        self._brain.visible = key == "chat"
         if key == "memory":
             self._refresh_memory()
         elif key == "context":
@@ -678,6 +702,7 @@ class MegaBrainApp:
                 if name == "__permission__" and payload:
                     self._show_permission_dialog(payload)
                 elif name in PHASE_LABELS:
+                    self._brain.set_state(name)
                     self._append_chat(f"  {PHASE_LABELS[name]}", "phase")
                 elif name == "done":
                     pass  # handled via result_q
@@ -717,6 +742,7 @@ class MegaBrainApp:
         self._input.configure(state=tk.NORMAL)
         self._send_btn.configure(state=tk.NORMAL, text="EXECUTAR")
         success = data.get("success", False)
+        self._brain.set_state("COMPLETED" if success else "ERROR")
         errors = data.get("errors") or []
         report = data.get("report_markdown", "")
         planner = data.get("planner", "?")
@@ -779,6 +805,7 @@ class MegaBrainApp:
         if self._running:
             if not messagebox.askokcancel("Sair", "Uma tarefa esta em execucao. Deseja sair mesmo?"):
                 return
+        self._brain.stop()
         self.root.destroy()
 
     def run(self):

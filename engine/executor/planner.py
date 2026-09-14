@@ -36,7 +36,7 @@ PLAN_SCHEMA: dict = {
                         "type": "string",
                         "enum": [
                             "read", "write", "edit", "search", "glob",
-                            "run", "run_tests", "mkdir", "delete", "git_status",
+                            "run", "run_tests", "mkdir", "delete", "git_status", "diagnostics",
                         ],
                     },
                     "params": {"type": "object"},
@@ -54,7 +54,8 @@ _PLAN_PROMPT = """You are the Mega Brain local task planner. Given a human objec
 
 Constraints:
 - Keep it to 3-6 steps. No destructive actions.
-- Actions available: read, write, edit, search, glob, run, run_tests, mkdir, git_status.
+- Actions available: read, write, edit, search, glob, run, run_tests, mkdir, git_status, diagnostics.
+- To diagnose failures use diagnostics (no params). It reads the canonical execution journal. Never guess execution.log.
 - params must be simple strings (path, pattern, command, old, new, content).
 - If the objective involves fixing tests, ALWAYS include run_tests and use it as validation.
 - validation is "tests" when you can verify by running the test suite, else "manual".
@@ -118,6 +119,7 @@ class LLMPlanner(Planner):
                 ("last_commit", context.get("last_commit")),
                 ("dirty_files", context.get("dirty_files")),
                 ("test_command", context.get("test_command")),
+                ("execution_log", context.get("execution_log")),
                 ("llm_gemini", context.get("llm_gemini")),
                 ("llm_groq", context.get("llm_groq")),
                 ("next_steps", context.get("resume", {}).get("next_steps")),
