@@ -85,7 +85,12 @@ print(json.dumps(results))
   const tmpFile = join(tmpdir(), `validate-package-${process.pid}.py`);
   try {
     writeFileSync(tmpFile, pythonScript, 'utf-8');
-    const result = execSync(`python3 "${tmpFile}"`, {
+    const { resolvePythonCmd } = await import('./lib/python-cmd.js');
+    const pythonCmd = resolvePythonCmd();
+    if (!pythonCmd) {
+      throw new Error('Python 3 não detectado (python3/python/py -3). Rode `mega-brain doctor`.');
+    }
+    const result = execSync(pythonCmd.join(' ') + ` "${tmpFile}"`, {
       input: JSON.stringify(files),
       encoding: 'utf-8',
       cwd: projectRoot,

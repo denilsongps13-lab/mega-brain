@@ -20,7 +20,17 @@ Data: 2026-03-01
 import os
 
 from .graph_builder import KnowledgeGraph, get_graph
-from .typed_schema import load_schema
+
+try:  # sibling module — package import in all real usage; fallback for direct-script run
+    from .typed_schema import load_schema
+except ImportError:
+    try:
+        from typed_schema import load_schema  # type: ignore
+    except ImportError:
+        # F1-17 hot-path is env-gated and default OFF. typed_schema.yaml/doc is
+        # OPTIONAL — when the module is absent, degrade so module import never breaks.
+        # _build_layer_hierarchy falls back to the 5 legacy DNA-chain types.
+        load_schema = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # ONTOLOGY CONFIG
@@ -68,6 +78,8 @@ def _build_layer_hierarchy(enabled: bool | None = None) -> list[str]:
     if enabled is None:
         enabled = ontology_hotpath_enabled()
     if not enabled:
+        return list(_LAYER_HIERARCHY_LEGACY)
+    if load_schema is None:
         return list(_LAYER_HIERARCHY_LEGACY)
     try:
         schema = load_schema()

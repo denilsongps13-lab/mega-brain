@@ -14,6 +14,19 @@ import json
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252; force UTF-8 so emoji-rich reports
+# don't raise UnicodeEncodeError on print().
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Directories to exclude from scan
 EXCLUDED_DIRS = {
     "node_modules",
@@ -58,8 +71,10 @@ def validate_json_file(file_path: Path) -> bool:
 
 def main():
     """Main validation function."""
-    # Start from project root (resolve dynamically)
-    project_root = Path(__file__).resolve().parents[2]
+    # Start from project root (resolve dynamically).
+    # File lives at <root>/engine/intelligence/validation/validate_json_integrity.py,
+    # so parents[3] is the repo root (parents[2] would be engine/).
+    project_root = Path(__file__).resolve().parents[3]
 
     # Collect all JSON files
     json_files = []

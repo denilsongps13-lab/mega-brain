@@ -17,9 +17,12 @@ const DISPATCH_MODE = process.env.MEGABRAIN_DISPATCH_MODE || 'subprocess';
 async function dispatchOperation(operation, kwargs = {}) {
   if (DISPATCH_MODE === 'subprocess') {
     const { execFileSync } = await import('child_process');
+    const { resolvePythonCmd } = await import('./lib/python-cmd.js');
+    const pythonCmd = resolvePythonCmd();
+    if (!pythonCmd) throw new Error('Python 3 não detectado (python3/python/py -3). Rode `mega-brain doctor`.');
     const projectRoot = resolve(__dirname, '..');
     const script = `import json, sys\nsys.path.insert(0, ${JSON.stringify(projectRoot)})\nfrom engine.operations import dispatch\nresult = dispatch(${JSON.stringify(operation)}, **json.loads(sys.argv[1]))\nprint(json.dumps(result, default=str))`;
-    const result = execFileSync('python3', ['-c', script, JSON.stringify(kwargs)], { cwd: projectRoot, encoding: 'utf-8', env: { ...process.env, PYTHONPATH: projectRoot } });
+    const result = execFileSync(pythonCmd[0], [...pythonCmd.slice(1), '-c', script, JSON.stringify(kwargs)], { cwd: projectRoot, encoding: 'utf-8', env: { ...process.env, PYTHONPATH: projectRoot } });
     return JSON.parse(result.trim() || 'null');
   }
   if (DISPATCH_MODE === 'mcp') throw new Error('MCP dispatch mode not yet implemented. Use subprocess (default).');

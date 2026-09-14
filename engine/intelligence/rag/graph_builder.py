@@ -31,7 +31,13 @@ import yaml
 try:  # sibling module — package import in all real usage; fallback for direct-script run
     from . import derivational_edges as _derivational
 except ImportError:  # pragma: no cover - direct ``python graph_builder.py`` execution
-    import derivational_edges as _derivational  # type: ignore
+    try:
+        import derivational_edges as _derivational  # type: ignore
+    except ImportError:
+        # STORY-213.W1.2 is env-gated and default OFF. The derivational spine is
+        # OPTIONAL — when the module is absent, degrade to `None` so imports never
+        # break the graph build. `deriv_on` stays False (see build_graph).
+        _derivational = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -852,7 +858,8 @@ def build_graph(
 
     # STORY-213.W1.2 — derivational spine (default OFF; see ``derivational_edges_enabled``).
     # When OFF, EVERY line below behaves exactly as pre-W1.2 (byte-identical build).
-    deriv_on = derivational_edges_enabled() if derivational is None else bool(derivational)
+    deriv_on = (derivational_edges_enabled() if derivational is None else bool(derivational))
+    deriv_on = deriv_on and _derivational is not None
     # {person: {atom_type: [(entity_id, provenance_set), ...]}} — populated only when ON,
     # so the derivation runs on real per-person provenance after the full DNA build.
     atoms_prov: dict[str, dict[str, list[tuple[str, set[str]]]]] = {}
