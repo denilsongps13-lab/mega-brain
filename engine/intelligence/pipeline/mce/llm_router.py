@@ -91,7 +91,7 @@ _VALID_PROVIDERS = ("gemini", "anthropic", "openai", "groq")
 
 _ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
-_GROQ_DEFAULT_MODEL = "gpt-oss-120b"
+_GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 _GROQ_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 _FALLBACK_DEFAULT_PROVIDER = "groq"
 # Gemini default model is owned by llm_extractor (MCE_LLM_MODEL env).

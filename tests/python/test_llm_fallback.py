@@ -367,7 +367,7 @@ def test_streaming_failure_after_first_chunk_raises_no_cutover(monkeypatch):
 def test_groq_endpoint_and_defaults():
     # Only variable NAMES are wired — values come from env at call time.
     assert llm_router._GROQ_DEFAULT_BASE_URL == "https://api.groq.com/openai/v1"
-    assert llm_router._GROQ_DEFAULT_MODEL == "gpt-oss-120b"
+    assert llm_router._GROQ_DEFAULT_MODEL == "openai/gpt-oss-120b"
     assert "groq" in llm_router._VALID_PROVIDERS
     assert "stream_prompt" in llm_router.__all__
 
