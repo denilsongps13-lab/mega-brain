@@ -45,7 +45,8 @@ if /i not "%PYEXE:~-7%"=="pythonw" (
 )
 if not defined PYWEXE set "PYWEXE=%PYEXE%"
 
-set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v5.pyw"
+set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v6.pyw"
+if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v5.pyw"
 if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v4.pyw"
 if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v3.pyw"
 if not exist "%UI%" set "UI=%PAYLOAD%\windows\ui\megabrain-ui-v2.pyw"
