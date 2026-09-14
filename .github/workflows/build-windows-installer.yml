@@ -46,9 +46,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest pytest-cov
 
-      - name: Validate Mega Brain UI v5
+      - name: Validate Mega Brain UI v6
         shell: pwsh
-        run: python windows/ui/megabrain-ui-v5.pyw --selftest
+        run: python windows/ui/megabrain-ui-v6.pyw --selftest
 
       - name: Run Python test suite
         shell: pwsh
@@ -74,7 +74,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Mega-Brain-Setup-x64-v5
+          name: Mega-Brain-Setup-x64-v6
           path: dist/Mega-Brain-Setup-x64.exe
           if-no-files-found: error
           retention-days: 14
