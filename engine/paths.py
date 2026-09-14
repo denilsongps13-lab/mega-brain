@@ -169,4 +169,18 @@ ROUTING: dict[str, Path] = {
     "batch_auto_creator_log": LOGS / "batch-auto-creator.jsonl",
     # models
     "hhem_model": DATA / "models" / "hhem",
+    # local autonomous runtime (engine/executor)
+    "mega_brain_state": DATA / "megabrain" / "projects",
+    "mega_brain_memory": DATA / "megabrain" / "memory-state.json",
+    "mega_brain_session_log": DATA / "megabrain" / "sessions.jsonl",
+    "mega_brain_runs": DATA / "megabrain" / "runs",
 }
+
+# ---------------------------------------------------------------------------
+# Local autonomous runtime (engine/executor) — data-layer store under DATA.
+# ---------------------------------------------------------------------------
+MEGA_BRAIN_STORE: Path = DATA / "megabrain"
+MEGA_BRAIN_PROJECTS: Path = MEGA_BRAIN_STORE / "projects"
+MEGA_BRAIN_MEMORY_FILE: Path = MEGA_BRAIN_STORE / "memory-state.json"
+MEGA_BRAIN_SESSION_LOG: Path = MEGA_BRAIN_STORE / "sessions.jsonl"
+MEGA_BRAIN_RUNS: Path = MEGA_BRAIN_STORE / "runs"

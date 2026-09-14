@@ -1,11 +1,43 @@
 /**
  * Mega Brain - ASCII Art & Visual Elements (v2)
  * Unified visual system — single source of truth for all CLI visuals.
+ *
+ * chalk / gradient-string / boxen are optional pretty-printer deps. On a
+ * fresh clone (no node_modules yet) the CLI still boots: all helpers fall
+ * back to plain console output so `mega-brain start` etc. never crash.
  */
 
-import chalk from 'chalk';
-import gradient from 'gradient-string';
-import boxen from 'boxen';
+const _plain = {
+  dim: (s) => s,
+  bold: (s) => s,
+  cyan: (s) => s,
+  green: (s) => s,
+  yellow: (s) => s,
+  red: (s) => s,
+  white: (s) => s,
+  blue: (s) => s,
+};
+let chalk;
+try {
+  const m = await import('chalk');
+  chalk = m.default || m;
+} catch {
+  chalk = _plain;
+}
+let gradient;
+try {
+  const m = await import('gradient-string');
+  gradient = m.default || m;
+} catch {
+  gradient = () => (text) => text;
+}
+let boxen;
+try {
+  const m = await import('boxen');
+  boxen = m.default || m;
+} catch {
+  boxen = (content) => content;
+}
 
 // ── Shared Gradients ──────────────────────────────────────────
 export const theme = {

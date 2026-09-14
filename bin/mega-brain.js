@@ -43,13 +43,17 @@ async function main() {
     return;
   }
 
-  if (!['install', 'setup', 'push', 'update'].includes(command)) {
+  if (!['install', 'setup', 'push', 'update', 'start', 'execute', 'context', 'memory', 'doctor', 'preflight'].includes(command)) {
     const projectEnv = resolve(process.cwd(), '.env');
     if (!existsSync(projectEnv)) {
-      const boxen = (await import('boxen')).default;
-      const chalk = (await import('chalk')).default;
-      console.log(boxen(chalk.cyan('  Primeira vez? Vamos configurar.\n') + chalk.dim('  Executando setup wizard...'), { padding: 1, borderColor: 'cyan', borderStyle: 'round' }));
-      const { runSetup } = await import('./lib/setup-wizard.js'); await runSetup(); process.exit(0);
+      let boxen = null, chalk = null;
+      try { boxen = (await import('boxen')).default ?? null; } catch {}
+      try { chalk = (await import('chalk')).default ?? null; } catch {}
+      if (boxen && chalk) {
+        console.log(boxen(chalk.cyan('  Primeira vez? Vamos configurar.\n') + chalk.dim('  Executando setup wizard...'), { padding: 1, borderColor: 'cyan', borderStyle: 'round' }));
+        const { runSetup } = await import('./lib/setup-wizard.js'); await runSetup(); process.exit(0);
+      }
+      console.log('\n  Sem .env e sem node_modules? Rode: mega-brain install');
     }
   }
 
@@ -72,6 +76,22 @@ async function main() {
     case 'workspace-health': console.log(JSON.stringify(await dispatchOperation('check_workspace_health'), null, 2)); break;
     case 'scheduler': console.log(JSON.stringify(await dispatchOperation('run_autonomous_pipeline'), null, 2)); break;
     case 'operations': console.log(JSON.stringify(await dispatchOperation('list_operations'), null, 2)); break;
+    case 'start': { const { runStart } = await import('./lib/start.js'); await runStart(pkg.version); break; }
+    case 'context': console.log(JSON.stringify(await dispatchOperation('project_context'), null, 2)); break;
+    case 'memory': console.log(JSON.stringify(await dispatchOperation('mega_memory'), null, 2)); break;
+    case 'execute': {
+      const objective = args.slice(1).join(' ').trim();
+      if (!objective) throw new Error('Uso: mega-brain execute "<objetivo>"');
+      const kw = {};
+      const d = args.indexOf('--dangerous');
+      if (d !== -1 && args[d + 1]) kw.permission_mode = args[d + 1];
+      const w = args.indexOf('--workspace');
+      if (w !== -1 && args[w + 1]) kw.workspace = args[w + 1];
+      const m = args.indexOf('--max-attempts');
+      if (m !== -1 && args[m + 1]) kw.max_attempts = args[m + 1];
+      console.log(JSON.stringify(await dispatchOperation('execute_task', { objective, ...kw }), null, 2));
+      break;
+    }
     case 'dispatch': { if (!args[1]) throw new Error('Uso: mega-brain dispatch <operation>'); const jf = args.indexOf('--json'); const kwargs = jf !== -1 && args[jf+1] ? JSON.parse(args[jf+1]) : {}; console.log(JSON.stringify(await dispatchOperation(args[1], kwargs), null, 2)); break; }
     default: console.error(`\n  Comando desconhecido: ${command}`); showHelp(pkg.version); process.exit(1);
   }
