@@ -39,6 +39,7 @@ The allowlist of executable names is the definition of "comandos permitidos":
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 # Executables the executor may launch (base-name match, PATHEXT aware).
@@ -119,11 +120,19 @@ _VERDICT_KEYS = {"allow", "block", "ask"}
 class PermissionGate:
     """Single decision point for every executor action on a workspace."""
 
-    def __init__(self, workspace: str | Path, mode: str | None = None):
+    def __init__(
+        self,
+        workspace: str | Path,
+        mode: str | None = None,
+        confirmer: Callable[[str], bool] | None = None,
+    ):
         self.workspace = Path(workspace).resolve()
         self.mode = (mode or _mode_from_env()).strip().lower()
         if self.mode not in _VALID_MODES:
             self.mode = _MODE_DEFAULT
+        # ``confirmer(reason) -> bool`` replaces the console y/N prompt for
+        # ``ask`` verdicts (GUI dialogs). Never overrides ``block``.
+        self._confirmer = confirmer
 
     # ------------------------------------------------------------------ paths
     def resolve(self, path: str | Path) -> Path | None:
@@ -217,8 +226,16 @@ class PermissionGate:
         if decision == "ask":
             if self.mode == "allow":
                 return (True, False, reason)
-            if self.mode == "ask" and _prompt_confirm(reason):
-                return (True, False, reason)
+            if self.mode == "ask":
+                if self._confirmer is not None:
+                    try:
+                        confirmed = bool(self._confirmer(reason))
+                    except Exception:
+                        confirmed = False
+                else:
+                    confirmed = _prompt_confirm(reason)
+                if confirmed:
+                    return (True, False, reason)
             return (False, self.mode == "ask", reason)
         # block
         return (False, False, reason)

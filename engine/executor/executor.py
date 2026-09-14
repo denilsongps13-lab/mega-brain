@@ -19,7 +19,7 @@ Flow for ``run(objective)``:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from engine.executor.context import load_project_context
 from engine.executor.memory import ProjectMemory
@@ -45,6 +45,8 @@ class TaskExecutor:
         permission_mode: str = "block",
         planner=None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        phase_observer: Callable[[str, dict | None], None] | None = None,
+        confirmer: Callable[[str], bool] | None = None,
     ):
         if not workspace:
             from engine import paths as engine_paths
@@ -52,11 +54,27 @@ class TaskExecutor:
             workspace = str(engine_paths.ROOT)
         self.workspace = str(workspace)
         self.store_root = store_root
-        self.gate = PermissionGate(self.workspace, mode=permission_mode)
+        self.gate = PermissionGate(self.workspace, mode=permission_mode, confirmer=confirmer)
         self.tools = ScopedTools(self.workspace, gate=self.gate)
         self.planner = planner
         self.memory = ProjectMemory(self.workspace, store_root=store_root)
         self.max_attempts = max(1, int(max_attempts))
+        self.phase_observer = phase_observer
+
+    # ---------------------------------------------------------------- phases
+    def _phase(self, name: str, **payload) -> None:
+        """Emit a lifecycle phase to the optional observer (never raises).
+
+        Phases: thinking -> planning -> executing -> validating -> done.
+        ``executing`` carries ``step`` (1-based index), ``total`` and
+        ``action`` for UI progress. The observer runs on the caller's thread.
+        """
+        if self.phase_observer is None:
+            return
+        try:
+            self.phase_observer(name, payload or None)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ main
     def run(self, objective: str | None = None) -> dict:
@@ -69,7 +87,9 @@ class TaskExecutor:
         objective = str(objective)
 
         self.memory.set_objective(objective)
+        self._phase("thinking")
         planner = make_planner(context, explicit=self.planner)
+        self._phase("planning")
         try:
             plan = planner.plan(objective, context)
         except Exception as exc:  # planner must never break the run
@@ -79,9 +99,13 @@ class TaskExecutor:
             plan = DeterministicPlanner().plan(objective, context)
 
         step_records: list[dict] = []
-        for step in plan.get("steps", []):
+        steps = plan.get("steps", [])
+        total = len(steps)
+        for index, step in enumerate(steps, 1):
+            self._phase("executing", step=index, total=total, action=step.get("action"))
             step_records.extend(self._execute_step_retry(step))
 
+        self._phase("validating")
         validation = validate_plan(plan.get("validation"), step_records)
 
         # A step is judged by its FINAL attempt: a transient failure that a later
@@ -142,6 +166,7 @@ class TaskExecutor:
 
         result["memory"] = self.memory.load()
         logger.info("objective done success=%s steps=%d", success, len(step_records))
+        self._phase("done", success=bool(success), objective=objective)
         return result
 
     # ----------------------------------------------------------------- steps
@@ -222,14 +247,24 @@ def execute_objective(
     permission_mode: str = "block",
     planner=None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    phase_observer: Callable[[str, dict | None], None] | None = None,
+    confirmer: Callable[[str], bool] | None = None,
 ) -> dict:
-    """Module-level entry point — one objective, one structured result."""
+    """Module-level entry point — one objective, one structured result.
+
+    ``phase_observer`` receives lifecycle phases (``thinking``, ``planning``,
+    ``executing``, ``validating``, ``done``) so a GUI can render progress.
+    ``confirmer`` (only meaningful with ``permission_mode="ask"``) is asked
+    before any gate verdict that needs human confirmation.
+    """
     return TaskExecutor(
         workspace,
         store_root=store_root,
         permission_mode=permission_mode,
         planner=planner,
         max_attempts=max_attempts,
+        phase_observer=phase_observer,
+        confirmer=confirmer,
     ).run(objective)
 
 
