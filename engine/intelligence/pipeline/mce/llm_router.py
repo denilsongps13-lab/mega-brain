@@ -39,11 +39,27 @@ Supported providers
   - ``gemini``     -- google-genai (existing path; reused via llm_extractor)
   - ``anthropic``  -- anthropic SDK (Haiku 4.5 by default)
   - ``openai``     -- openai SDK (gpt-4o-mini by default)
+  - ``groq``       -- openai SDK against Groq's OpenAI-compatible endpoint
+    (``https://api.groq.com/openai/v1``, ``gpt-oss-120b`` by default, key from
+    ``GROQ_API_KEY``). The default fallback for Gemini.
+
+Resilient primary → fallback
+----------------------------
+When the selected provider IS the default (``gemini``), the router attempts it
+ONCE and, on a transient transport failure (429/5xx/timeout/connection reset),
+an unavailable provider (missing SDK/key), or an unconfigured Gemini path, drops
+IMMEDIATELY to a single fallback attempt on ``groq``. No cooldown, no local RPM
+limiter, no infinite loop — each call is independent, so the next call starts on
+Gemini again. The fallback provider is tunable via ``MCE_LLM_FALLBACK_PROVIDER``.
+For non-default selections the legacy behaviour is kept (fall back to the
+configured default when the requested provider is unavailable).
 
 Each provider exposes the same logical contract:
   - ``text``: str input (the assembled prompt)
   - ``structured_schema``: optional JSON-schema dict for structured output
-  - Returns: raw text response (str).
+  - ``tools``: optional OpenAI-style function-calling tool list
+  - Returns: raw text response (str), or an iterator of str chunks when
+    ``stream=True``.
 
 Status
 ------
@@ -56,6 +72,12 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+
+from engine.intelligence.pipeline.mce.llm_retry import (
+    MAX_LLM_RETRIES,
+    is_transient_llm_error,
+)
 
 logger = logging.getLogger("mce.llm_router")
 
@@ -65,10 +87,13 @@ logger = logging.getLogger("mce.llm_router")
 # ─────────────────────────────────────────────────────────────────────────────
 
 _DEFAULT_PROVIDER = "gemini"
-_VALID_PROVIDERS = ("gemini", "anthropic", "openai")
+_VALID_PROVIDERS = ("gemini", "anthropic", "openai", "groq")
 
 _ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 _OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+_GROQ_DEFAULT_MODEL = "gpt-oss-120b"
+_GROQ_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+_FALLBACK_DEFAULT_PROVIDER = "groq"
 # Gemini default model is owned by llm_extractor (MCE_LLM_MODEL env).
 
 
@@ -137,6 +162,59 @@ def _resolve_provider(
     return _DEFAULT_PROVIDER
 
 
+def _resolve_fallback_env() -> str | None:
+    """Resolve the fallback provider for the DEFAULT provider (gemini).
+
+    ``MCE_LLM_FALLBACK_PROVIDER`` selects it; default is ``groq``. Returns
+    ``None`` when unset-restricted or invalid so the router re-raises instead
+    of guessing. Only applies when the chosen provider is the built-in default.
+    """
+    raw = os.environ.get("MCE_LLM_FALLBACK_PROVIDER", "").strip().lower()
+    if raw:
+        if raw not in _VALID_PROVIDERS:
+            logger.warning(
+                "Ignored invalid MCE_LLM_FALLBACK_PROVIDER=%r — expected one of %s",
+                raw,
+                _VALID_PROVIDERS,
+            )
+            return None
+        return raw
+    return _FALLBACK_DEFAULT_PROVIDER
+
+
+def _fallback_for(chosen: str) -> str | None:
+    """Pick the fallback for ``chosen``; ``None`` when there is none.
+
+    Legacy behaviour: a non-default selection (e.g. explicit ``anthropic``)
+    falls back to the configured default (``gemini``). When the default itself
+    was chosen, the resilient Gemini → ``groq`` fallback applies. Never returns
+    a provider equal to ``chosen`` (would be an infinite loop).
+    """
+    if chosen != _DEFAULT_PROVIDER:
+        return None if _DEFAULT_PROVIDER == chosen else _DEFAULT_PROVIDER
+    candidate = _resolve_fallback_env()
+    if candidate == chosen:
+        return None
+    return candidate
+
+
+def _is_provider_unavailable(exc: BaseException) -> bool:
+    """True when the exception means the provider cannot serve, full stop.
+
+    Covers the router's own ``ProviderUnavailableError`` and the Gemini path's
+    ``LLMNotConfiguredError`` (no SDK / no API key). Both trigger the fallback.
+    """
+    if isinstance(exc, ProviderUnavailableError):
+        return True
+    try:
+        from engine.intelligence.pipeline.mce.llm_extractor import (
+            LLMNotConfiguredError,
+        )
+    except Exception:  # pragma: no cover — defensive import
+        return False
+    return isinstance(exc, LLMNotConfiguredError)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Gemini  (delegates to llm_extractor — preserves backward compat)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,17 +225,45 @@ def _run_gemini(
     *,
     max_output_tokens: int | None = None,
     structured_schema: dict | None = None,
-) -> str:
+    tools: list[dict] | None = None,
+    max_attempts: int | None = None,
+    stream: bool = False,
+) -> str | Iterator[str]:
     """Call Gemini via the existing llm_extractor.run_prompt.
 
-    ``structured_schema`` is accepted but ignored on the Gemini path — the
-    existing llm_extractor wraps a free-form text call. Callers that need
-    Gemini structured output should keep using gemini_analyzer.py for the
-    fixed-task surface.
+    ``structured_schema`` and ``tools`` are accepted but ignored on the Gemini
+    path — the existing llm_extractor wraps a free-form text call. Callers that
+    need Gemini structured output should keep using gemini_analyzer.py for the
+    fixed-task surface. ``stream`` simulates streaming over the batch result
+    (the project's existing pattern) so the router's streaming surface stays
+    uniform across providers.
+
+    ``max_attempts`` is forwarded to llm_extractor (default: its own 4). The
+    router passes ``1`` when Gemini is primary in a fallback flow, so a single
+    transient Gemini failure drops straight to the fallback provider.
     """
     from engine.intelligence.pipeline.mce import llm_extractor
 
-    return llm_extractor._run_prompt_via_gemini(prompt, max_output_tokens=max_output_tokens)
+    def _run() -> str:
+        return llm_extractor._run_prompt_via_gemini(
+            prompt,
+            max_output_tokens=max_output_tokens,
+            max_attempts=max_attempts,
+        )
+
+    if stream:
+
+        def _stream():
+            text = _run()
+            if not text:
+                return
+            step = 96
+            for i in range(0, len(text), step):
+                yield text[i : i + step]
+
+        return _stream()
+
+    return _run()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +303,10 @@ def _run_anthropic(
     max_output_tokens: int | None = None,
     structured_schema: dict | None = None,
     model: str | None = None,
-) -> str:
+    tools: list[dict] | None = None,
+    max_attempts: int | None = None,
+    stream: bool = False,
+) -> str | Iterator[str]:
     """Call Anthropic Claude Haiku (default) and return the text response.
 
     Prompt caching: the assembled prompt is sent as a single user message
@@ -210,6 +319,10 @@ def _run_anthropic(
     return JSON matching the schema. We then materialize the tool input
     as a JSON string and return it (callers can pass it to
     ``extract_json`` or parse directly).
+
+    ``max_attempts`` threads through ``call_with_retry`` (default 4). When
+    ``stream`` is True the return type is an iterator of text chunks rather
+    than ``str``.
     """
     api_key = _resolve_anthropic_key()
     if not api_key:
@@ -223,7 +336,6 @@ def _run_anthropic(
         ) from exc
 
     from engine.intelligence.pipeline.mce.llm_retry import (
-        MAX_LLM_RETRIES,
         call_with_retry,
         resolve_timeout_s,
     )
@@ -232,6 +344,7 @@ def _run_anthropic(
         model or os.environ.get("MCE_LLM_ANTHROPIC_MODEL", "").strip() or _ANTHROPIC_DEFAULT_MODEL
     )
     max_tok = max_output_tokens or 4096
+    attempts = max_attempts or MAX_LLM_RETRIES
 
     # NON-NEGOTIABLE: explicit transport timeout on the client. Without it the
     # Anthropic SDK can block indefinitely on a stalled TLS keep-alive when the
@@ -247,19 +360,21 @@ def _run_anthropic(
     if structured_schema:
         tool_name = "emit_structured_output"
         # Anthropic input_schema follows JSON-schema dialect.
-        tools = [
+        schema_tools = [
             {
                 "name": tool_name,
                 "description": "Emit the structured output for this MCE step.",
                 "input_schema": structured_schema,
             }
         ]
+        if tools:
+            schema_tools.extend(tools)
 
         def _structured_call() -> str:
             message = client.messages.create(
                 model=chosen_model,
                 max_tokens=max_tok,
-                tools=tools,
+                tools=schema_tools,
                 tool_choice={"type": "tool", "name": tool_name},
                 messages=[
                     {
@@ -286,15 +401,39 @@ def _run_anthropic(
                     return block.text  # type: ignore[attr-defined]
             return ""
 
-        return call_with_retry(
-            _structured_call, max_attempts=MAX_LLM_RETRIES, label="anthropic"
-        )
+        return call_with_retry(_structured_call, max_attempts=attempts, label="anthropic")
+
+    if stream:
+
+        def _stream_gen():
+            with client.messages.stream(
+                model=chosen_model,
+                max_tokens=max_tok,
+                tools=tools or None,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    }
+                ],
+            ) as stream_ctx:
+                for text in stream_ctx.text_stream:
+                    yield text
+
+        return _stream_gen()
 
     # Free-form text path
     def _freeform_call() -> str:
         message = client.messages.create(
             model=chosen_model,
             max_tokens=max_tok,
+            tools=tools or None,
             messages=[
                 {
                     "role": "user",
@@ -313,7 +452,7 @@ def _run_anthropic(
                 return (block.text or "").strip()  # type: ignore[attr-defined]
         return ""
 
-    return call_with_retry(_freeform_call, max_attempts=MAX_LLM_RETRIES, label="anthropic")
+    return call_with_retry(_freeform_call, max_attempts=attempts, label="anthropic")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,13 +492,20 @@ def _run_openai(
     max_output_tokens: int | None = None,
     structured_schema: dict | None = None,
     model: str | None = None,
-) -> str:
+    tools: list[dict] | None = None,
+    max_attempts: int | None = None,
+    stream: bool = False,
+) -> str | Iterator[str]:
     """Call OpenAI gpt-4o-mini (default) and return the text response.
 
     Structured output: when ``structured_schema`` is provided, we use
     ``response_format={"type": "json_schema", ...}`` so the response is
     guaranteed to match the schema (OpenAI's strict structured output).
     Returns the JSON string verbatim; callers can ``json.loads`` it.
+
+    ``tools`` (OpenAI function-calling format) is passed to the chat request;
+    ``max_attempts`` threads through ``call_with_retry`` (default 4); when
+    ``stream`` is True the return type is an iterator of text chunks.
     """
     api_key = _resolve_openai_key()
     if not api_key:
@@ -371,7 +517,6 @@ def _run_openai(
         raise ProviderUnavailableError("openai SDK not installed — pip install openai") from exc
 
     from engine.intelligence.pipeline.mce.llm_retry import (
-        MAX_LLM_RETRIES,
         call_with_retry,
         resolve_timeout_s,
     )
@@ -380,6 +525,7 @@ def _run_openai(
         model or os.environ.get("MCE_LLM_OPENAI_MODEL", "").strip() or _OPENAI_DEFAULT_MODEL
     )
     max_tok = max_output_tokens or 4096
+    attempts = max_attempts or MAX_LLM_RETRIES
 
     # MCE-2.2 hunt: explicit timeout so httpx receive_response_headers cannot
     # stall the pipeline indefinitely (observed live hang in Step 5). The SDK's
@@ -388,37 +534,169 @@ def _run_openai(
     # to the Gemini/Anthropic/embedding paths (no retry multiplication).
     client = OpenAI(api_key=api_key, timeout=resolve_timeout_s(), max_retries=0)
 
-    if structured_schema:
+    request_kwargs: dict = {
+        "model": chosen_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tok,
+    }
+    if structured_schema and not tools:
+        request_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "mce_step_output",
+                "schema": structured_schema,
+                "strict": False,
+            },
+        }
+    if tools:
+        request_kwargs["tools"] = tools
 
-        def _structured_call() -> str:
-            response = client.chat.completions.create(
-                model=chosen_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tok,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "mce_step_output",
-                        "schema": structured_schema,
-                        "strict": False,
-                    },
-                },
-            )
-            choice = response.choices[0]
-            return (choice.message.content or "").strip()
+    if stream:
 
-        return call_with_retry(_structured_call, max_attempts=MAX_LLM_RETRIES, label="openai")
+        def _stream_gen():
+            stream_resp = client.chat.completions.create(**request_kwargs, stream=True)
+            for chunk in stream_resp:
+                if not getattr(chunk, "choices", None):
+                    continue
+                delta = chunk.choices[0].delta
+                text = getattr(delta, "content", None)
+                if text:
+                    yield text
+
+        return _stream_gen()
 
     def _freeform_call() -> str:
-        response = client.chat.completions.create(
-            model=chosen_model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tok,
-        )
+        response = client.chat.completions.create(**request_kwargs)
         choice = response.choices[0]
         return (choice.message.content or "").strip()
 
-    return call_with_retry(_freeform_call, max_attempts=MAX_LLM_RETRIES, label="openai")
+    return call_with_retry(_freeform_call, max_attempts=attempts, label="openai")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Groq  (OpenAI-compatible endpoint, same openai SDK)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_groq_key() -> str | None:
+    """Resolve Groq API key. Env first, fall back to .env at project root.
+
+    Only the variable NAME is referenced — the value is handled exactly like
+    the other provider keys (never logged).
+    """
+    key = os.environ.get("GROQ_API_KEY")
+    if key:
+        return key
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    env_file = root / ".env"
+    if not env_file.exists():
+        return None
+    try:
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("GROQ_API_KEY="):
+                candidate = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if candidate:
+                    os.environ.setdefault("GROQ_API_KEY", candidate)
+                    return candidate
+    except OSError as exc:
+        logger.debug(".env read failed for Groq key: %s", exc)
+    return None
+
+
+def _run_groq(
+    prompt: str,
+    *,
+    max_output_tokens: int | None = None,
+    structured_schema: dict | None = None,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+    max_attempts: int | None = None,
+    stream: bool = False,
+) -> str | Iterator[str]:
+    """Call Groq's OpenAI-compatible chat endpoint and return the text response.
+
+    Uses the SAME openai SDK as the ``openai`` provider against
+    ``https://api.groq.com/openai/v1`` (override via ``GROQ_BASE_URL``) with a
+    key from ``GROQ_API_KEY`` and ``gpt-oss-120b`` by default
+    (``MCE_LLM_GROQ_MODEL`` override). Structured output uses OpenAI
+    ``response_format``/json_schema; tool calling uses the OpenAI function
+    format; ``stream=True`` returns an iterator of text chunks.
+    """
+    api_key = _resolve_groq_key()
+    if not api_key:
+        raise ProviderUnavailableError("GROQ_API_KEY not set")
+
+    try:
+        from openai import OpenAI  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ProviderUnavailableError(
+            "openai SDK not installed — pip install openai (required for Groq)"
+        ) from exc
+
+    from engine.intelligence.pipeline.mce.llm_retry import (
+        call_with_retry,
+        resolve_timeout_s,
+    )
+
+    chosen_model = (
+        model or os.environ.get("MCE_LLM_GROQ_MODEL", "").strip() or _GROQ_DEFAULT_MODEL
+    )
+    max_tok = max_output_tokens or 4096
+    attempts = max_attempts or MAX_LLM_RETRIES
+    base_url = os.environ.get("GROQ_BASE_URL", "").strip() or _GROQ_DEFAULT_BASE_URL
+
+    # Same transport discipline as the other providers: explicit timeout and
+    # SDK retries disabled so our shared ``call_with_retry`` owns backoff (no
+    # retry multiplication, no unbounded hang).
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=resolve_timeout_s(),
+        max_retries=0,
+    )
+
+    request_kwargs: dict = {
+        "model": chosen_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tok,
+    }
+    if structured_schema and not tools:
+        request_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "mce_step_output",
+                "schema": structured_schema,
+                "strict": False,
+            },
+        }
+    if tools:
+        request_kwargs["tools"] = tools
+
+    if stream:
+
+        def _stream_gen():
+            stream_resp = client.chat.completions.create(**request_kwargs, stream=True)
+            for chunk in stream_resp:
+                if not getattr(chunk, "choices", None):
+                    continue
+                delta = chunk.choices[0].delta
+                text = getattr(delta, "content", None)
+                if text:
+                    yield text
+
+        return _stream_gen()
+
+    def _freeform_call() -> str:
+        response = client.chat.completions.create(**request_kwargs)
+        choice = response.choices[0]
+        return (choice.message.content or "").strip()
+
+    return call_with_retry(_freeform_call, max_attempts=attempts, label="groq")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -443,40 +721,60 @@ class LLMRouter:
         structured_schema: dict | None = None,
         max_output_tokens: int | None = None,
         model: str | None = None,
+        tools: list[dict] | None = None,
     ) -> str:
         """Route the prompt to the chosen provider and return raw text.
 
+        Resilient fallback (primary Gemini → ``groq``): when the chosen
+        provider IS the built-in default, the router makes exactly ONE attempt
+        on it and, on a transient transport error (429/5xx/timeout/conn reset),
+        an unavailable provider (missing SDK/key) or an unconfigured Gemini
+        path, drops IMMEDIATELY to a single fallback attempt on ``groq``. No
+        cooldown, no local rate limiter, no retry loop — this call is done with
+        the fallback result or its error. The NEXT call selects Gemini again.
+
+        ``MCE_LLM_FALLBACK_PROVIDER`` overrides the fallback (default ``groq``).
+        Non-transient errors are re-raised untouched (explicit behaviour); a
+        failing fallback is also re-raised.
+
         Args:
             prompt: Assembled prompt (system + user instructions inline).
-            provider: ``gemini`` | ``anthropic`` | ``openai``. If omitted,
-                the env-driven selection in ``_resolve_provider`` is used.
+            provider: ``gemini`` | ``groq`` | ``anthropic`` | ``openai``. If
+                omitted, the env-driven selection in ``_resolve_provider`` is
+                used.
             step: Logical step name (e.g. ``insights``, ``behavioral``).
                 Used to pick per-step env override
                 (``MCE_LLM_{STEP_UPPER}``).
             structured_schema: Optional JSON-schema dict for structured
-                output. Honored on anthropic + openai; ignored on gemini
-                (gemini path is text-only here; use gemini_analyzer.py
-                for fixed-task structured calls).
+                output. Honored on anthropic + openai + groq; ignored on
+                gemini (gemini path is text-only here; use
+                gemini_analyzer.py for fixed-task structured calls).
             max_output_tokens: Optional cap on completion tokens.
             model: Override the per-provider default model.
+            tools: Optional OpenAI-style function-calling tool list. Passed
+                through to every provider path so the fallback preserves
+                tool-use.
 
         Returns:
             The raw text response from the chosen provider. Use
             ``llm_extractor.extract_json`` to parse JSON envelopes.
 
         Raises:
-            ProviderUnavailableError if BOTH the chosen and default
+            ProviderUnavailableError if BOTH the chosen and fallback
             providers are unavailable.
             ValueError if ``provider`` is an unknown identifier.
         """
         chosen = _resolve_provider(explicit=provider, step=step)
+        fallback = _fallback_for(chosen)
         logger.debug(
-            "LLMRouter.run_prompt(step=%s) -> provider=%s schema=%s",
+            "LLMRouter.run_prompt(step=%s) -> provider=%s fallback=%s schema=%s",
             step,
             chosen,
+            fallback,
             "yes" if structured_schema else "no",
         )
 
+        primary_attempts = 1 if chosen == _DEFAULT_PROVIDER else None
         try:
             return self._dispatch(
                 chosen,
@@ -484,22 +782,102 @@ class LLMRouter:
                 max_output_tokens=max_output_tokens,
                 structured_schema=structured_schema,
                 model=model,
+                tools=tools,
+                max_attempts=primary_attempts,
             )
-        except ProviderUnavailableError as exc:
-            if chosen == _DEFAULT_PROVIDER:
+        except Exception as exc:
+            # Non-transient → explicit failure, never mask it.
+            if not fallback or fallback == chosen:
+                raise
+            if not (
+                _is_provider_unavailable(exc) or is_transient_llm_error(exc)
+            ):
                 raise
             logger.warning(
-                "Provider %s unavailable (%s) — falling back to %s",
+                "LLM provider %s failed (%s: %s) — falling back to %s",
                 chosen,
+                type(exc).__name__,
                 exc,
-                _DEFAULT_PROVIDER,
+                fallback,
             )
             return self._dispatch(
-                _DEFAULT_PROVIDER,
+                fallback,
                 prompt,
                 max_output_tokens=max_output_tokens,
                 structured_schema=structured_schema,
-                model=None,  # default-provider keeps its own model selection
+                model=None,  # fallback keeps its own model selection
+                tools=tools,
+                max_attempts=1,
+            )
+
+    def stream_prompt(
+        self,
+        prompt: str,
+        *,
+        provider: str | None = None,
+        step: str | None = None,
+        structured_schema: dict | None = None,
+        max_output_tokens: int | None = None,
+        model: str | None = None,
+        tools: list[dict] | None = None,
+    ) -> Iterator[str]:
+        """Stream text chunks from the chosen provider (iterator of str).
+
+        Fallback semantics mirror :meth:`run_prompt`: when the primary is the
+        default provider and the stream fails with a transient / unavailable
+        error BEFORE the first chunk is emitted, the stream restarts on the
+        fallback provider. A failure AFTER output started is re-raised (the
+        client already saw partial output — no invisible cut-over). Each call
+        starts fresh on the primary provider.
+
+        Returns:
+            An iterator of ``str`` chunks. Consume with ``for chunk in ...``.
+        """
+        chosen = _resolve_provider(explicit=provider, step=step)
+        fallback = _fallback_for(chosen)
+        logger.debug(
+            "LLMRouter.stream_prompt(step=%s) -> provider=%s fallback=%s",
+            step,
+            chosen,
+            fallback,
+        )
+
+        primary_attempts = 1 if chosen == _DEFAULT_PROVIDER else None
+        primary = self._dispatch_stream(
+            chosen,
+            prompt,
+            max_output_tokens=max_output_tokens,
+            structured_schema=structured_schema,
+            model=model,
+            tools=tools,
+            max_attempts=primary_attempts,
+        )
+        yielded_chunk = False
+        try:
+            for chunk in primary:
+                yielded_chunk = True
+                yield chunk
+        except Exception as exc:
+            if yielded_chunk or not fallback or fallback == chosen:
+                raise
+            if not (_is_provider_unavailable(exc) or is_transient_llm_error(exc)):
+                raise
+            logger.warning(
+                "LLM stream from %s failed before first chunk (%s: %s) — "
+                "switching stream to %s",
+                chosen,
+                type(exc).__name__,
+                exc,
+                fallback,
+            )
+            yield from self._dispatch_stream(
+                fallback,
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                model=None,
+                tools=tools,
+                max_attempts=1,
             )
 
     def _dispatch(
@@ -510,12 +888,16 @@ class LLMRouter:
         max_output_tokens: int | None,
         structured_schema: dict | None,
         model: str | None,
+        tools: list[dict] | None = None,
+        max_attempts: int | None = None,
     ) -> str:
         if provider == "gemini":
             return _run_gemini(
                 prompt,
                 max_output_tokens=max_output_tokens,
                 structured_schema=structured_schema,
+                tools=tools,
+                max_attempts=max_attempts,
             )
         if provider == "anthropic":
             return _run_anthropic(
@@ -523,6 +905,8 @@ class LLMRouter:
                 max_output_tokens=max_output_tokens,
                 structured_schema=structured_schema,
                 model=model,
+                tools=tools,
+                max_attempts=max_attempts,
             )
         if provider == "openai":
             return _run_openai(
@@ -530,6 +914,70 @@ class LLMRouter:
                 max_output_tokens=max_output_tokens,
                 structured_schema=structured_schema,
                 model=model,
+                tools=tools,
+                max_attempts=max_attempts,
+            )
+        if provider == "groq":
+            return _run_groq(
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                model=model,
+                tools=tools,
+                max_attempts=max_attempts,
+            )
+        # Defensive — _resolve_provider should never produce anything else.
+        raise ValueError(f"Unsupported provider {provider!r}")
+
+    def _dispatch_stream(
+        self,
+        provider: str,
+        prompt: str,
+        *,
+        max_output_tokens: int | None,
+        structured_schema: dict | None,
+        model: str | None,
+        tools: list[dict] | None = None,
+        max_attempts: int | None = None,
+    ) -> Iterator[str]:
+        if provider == "gemini":
+            return _run_gemini(
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                tools=tools,
+                max_attempts=max_attempts,
+                stream=True,
+            )
+        if provider == "anthropic":
+            return _run_anthropic(
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                model=model,
+                tools=tools,
+                max_attempts=max_attempts,
+                stream=True,
+            )
+        if provider == "openai":
+            return _run_openai(
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                model=model,
+                tools=tools,
+                max_attempts=max_attempts,
+                stream=True,
+            )
+        if provider == "groq":
+            return _run_groq(
+                prompt,
+                max_output_tokens=max_output_tokens,
+                structured_schema=structured_schema,
+                model=model,
+                tools=tools,
+                max_attempts=max_attempts,
+                stream=True,
             )
         # Defensive — _resolve_provider should never produce anything else.
         raise ValueError(f"Unsupported provider {provider!r}")
@@ -555,6 +1003,7 @@ def run_prompt(
     structured_schema: dict | None = None,
     max_output_tokens: int | None = None,
     model: str | None = None,
+    tools: list[dict] | None = None,
 ) -> str:
     """Module-level shortcut to ``get_router().run_prompt(...)``."""
     return get_router().run_prompt(
@@ -564,6 +1013,29 @@ def run_prompt(
         structured_schema=structured_schema,
         max_output_tokens=max_output_tokens,
         model=model,
+        tools=tools,
+    )
+
+
+def stream_prompt(
+    prompt: str,
+    *,
+    provider: str | None = None,
+    step: str | None = None,
+    structured_schema: dict | None = None,
+    max_output_tokens: int | None = None,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+) -> Iterator[str]:
+    """Module-level shortcut to ``get_router().stream_prompt(...)``."""
+    return get_router().stream_prompt(
+        prompt,
+        provider=provider,
+        step=step,
+        structured_schema=structured_schema,
+        max_output_tokens=max_output_tokens,
+        model=model,
+        tools=tools,
     )
 
 
@@ -600,6 +1072,15 @@ def is_provider_available(provider: str) -> bool:
             return True
         except ImportError:
             return False
+    if provider == "groq":
+        if not _resolve_groq_key():
+            return False
+        try:
+            import openai  # noqa: F401
+
+            return True
+        except ImportError:
+            return False
     return False
 
 
@@ -611,4 +1092,5 @@ __all__ = [
     "is_provider_available",
     "resolve_provider",
     "run_prompt",
+    "stream_prompt",
 ]

@@ -103,12 +103,22 @@ def is_available() -> bool:
     return _resolve_api_key() is not None
 
 
-def _run_prompt_via_gemini(prompt: str, *, max_output_tokens: int | None = None) -> str:
+def _run_prompt_via_gemini(
+    prompt: str,
+    *,
+    max_output_tokens: int | None = None,
+    max_attempts: int | None = None,
+) -> str:
     """Send ``prompt`` to Gemini, return raw text.
 
     This is the LOW-LEVEL Gemini call. New code should prefer
     ``llm_router.run_prompt`` so provider can be swapped via env. The
     legacy ``run_prompt`` shim below delegates here.
+
+    ``max_attempts`` overrides the transport retries (default:
+    ``MAX_LLM_RETRIES`` = 4). The router passes ``1`` when Gemini is the
+    primary in a fallback flow, so one transient failure drops straight to
+    the fallback provider instead of re-trying Gemini.
 
     Raises:
         LLMNotConfigured: if no API key is reachable.
@@ -170,7 +180,9 @@ def _run_prompt_via_gemini(prompt: str, *, max_output_tokens: int | None = None)
     # last exception is re-raised — normalized to LLMCallFailedError so callers
     # that catch it (two-stage → single-pass) degrade non-blocking.
     try:
-        return call_with_retry(_one_call, max_attempts=MAX_LLM_RETRIES, label="gemini")
+        return call_with_retry(
+            _one_call, max_attempts=max_attempts or MAX_LLM_RETRIES, label="gemini"
+        )
     except LLMCallFailedError:
         raise
     except Exception as exc:  # network/quota exhausted
