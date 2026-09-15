@@ -37,8 +37,13 @@ jobs:
             --cov=engine/commercial \
             --cov-report=term-missing \
             --cov-fail-under=70
-      - name: Run E2E BrainEngine tests
-        run: python3 -m pytest tests/e2e/ -v --tb=short
+      - name: Run E2E BrainEngine tests when available
+        run: |
+          if [ -d tests/e2e ]; then
+            python3 -m pytest tests/e2e/ -v --tb=short
+          else
+            echo "tests/e2e not present on this branch; Python executor E2E coverage already runs under tests/python/test_executor_e2e.py"
+          fi
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         if: always()
