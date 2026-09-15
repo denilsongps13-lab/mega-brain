@@ -9,7 +9,7 @@ on:
       - 'requirements.txt'
       - '.github/workflows/test.yml'
   pull_request:
-    branches: [main]
+    branches: [main, feat/ruflo-best-of]
     paths:
       - 'engine/**'
       - 'tests/**'
