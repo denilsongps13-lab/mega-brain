@@ -29,12 +29,14 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
           python3 -m pip install pytest pytest-cov
-      - name: Run tests with coverage
+      - name: Run Python tests
+        run: python3 -m pytest tests/python/ -v --tb=short
+      - name: Verify V7 commercial coverage
         run: |
-          python3 -m pytest tests/python/ -v --tb=short \
-            --cov=engine/intelligence \
+          python3 -m pytest tests/python/test_commercial_v7.py -v --tb=short \
+            --cov=engine/commercial \
             --cov-report=term-missing \
-            --cov-fail-under=9
+            --cov-fail-under=70
       - name: Run E2E BrainEngine tests
         run: python3 -m pytest tests/e2e/ -v --tb=short
       - name: Upload coverage report
