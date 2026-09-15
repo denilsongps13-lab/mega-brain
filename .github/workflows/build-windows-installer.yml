@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/animated-brain-exec-diagnostics
+      - feat/mega-brain-v7-commercial
     paths:
       - 'windows/**'
       - 'engine/**'
@@ -44,7 +44,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pytest pytest-cov
+          python -m pip install pytest pytest-cov openai
 
       - name: Validate Mega Brain UI v6
         shell: pwsh
@@ -74,7 +74,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Mega-Brain-Setup-x64-v6
+          name: Mega-Brain-Setup-x64-v7
           path: dist/Mega-Brain-Setup-x64.exe
           if-no-files-found: error
           retention-days: 14
