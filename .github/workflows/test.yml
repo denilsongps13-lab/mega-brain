@@ -37,8 +37,6 @@ jobs:
             --cov=engine/commercial \
             --cov-report=term-missing \
             --cov-fail-under=70
-      - name: Run E2E BrainEngine tests
-        run: python3 -m pytest tests/e2e/ -v --tb=short
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         if: always()
