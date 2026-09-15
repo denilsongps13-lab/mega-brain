@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/animated-brain-exec-diagnostics
+      - feat/ruflo-best-of
     paths:
       - 'windows/**'
       - 'engine/**'
@@ -70,11 +70,12 @@ jobs:
           $item = Get-Item $path
           Write-Host "Installer: $($item.FullName)"
           Write-Host "Size: $([math]::Round($item.Length / 1MB, 2)) MB"
+          Get-FileHash $path -Algorithm SHA256
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Mega-Brain-Setup-x64-v6
+          name: Mega-Brain-Setup-x64-v7-guardian
           path: dist/Mega-Brain-Setup-x64.exe
           if-no-files-found: error
           retention-days: 14
