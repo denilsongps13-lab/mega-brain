@@ -38,10 +38,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest pytest-cov openai
 
-      - name: Validate Mega Brain UI
+      - name: Validate Mega Brain UI v6
         shell: pwsh
-        run: python windows/ui/megabrrain-ui-v6.pyw --selftest
-        continue-on-error: true
+        run: python windows/ui/megabrain-ui-v6.pyw --selftest
 
       - name: Run Python test suite
         shell: pwsh
