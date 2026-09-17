@@ -1,13 +1,4 @@
-; -------------------------------------------------------------------------------
-;  Mega Brain – Windows installer (Inno Setup 6)
-;
-;  Build with:  npm run build:installer
-;  Sources:
-;    - windows/installer/staging/*        clean tracked snapshot (built by the script)
-;    - windows/installer/Mega-Brain.cmd   launcher (placed at {app})
-;    - windows/installer/bootstrap.ps1    post-install preparation
-; -------------------------------------------------------------------------------
-
+; Mega Brain Windows installer (Inno Setup 6)
 #ifndef MyAppVersion
   #define MyAppVersion "2.0.0"
 #endif
@@ -41,6 +32,7 @@ VersionInfoVersion={#MyAppVersion}.0
 VersionInfoDescription={#MyAppName} installer
 VersionInfoProductName={#MyAppName}
 ChangesAssociations=no
+ChangesEnvironment=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -52,16 +44,16 @@ Name: "runnow"; Description: "Abrir o Mega Brain agora"; GroupDescription: "Cont
 
 [Files]
 Source: "staging\*"; DestDir: "{app}\mega-brain"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "Mega-Brain.cmd"; DestDir: "{app}"; Flags: ignoreversion
-Source: "bootstrap.ps1"; DestDir: "{app}\mega-brain\windows\installer"; Flags: ignoreversion
+Source: "Mega-Brain.cmd"; DestDir: "{app}"; DestName: "mega-brain.cmd"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\Mega-Brain.cmd"; WorkingDir: "{app}\mega-brain"; Comment: "Abrir o Mega Brain"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\mega-brain.cmd"; WorkingDir: "{app}\mega-brain"; Comment: "Abrir Mega Brain com Claude Code"
+Name: "{group}\{#MyAppName} - Interface"; Filename: "{app}\mega-brain.cmd"; Parameters: "gui"; WorkingDir: "{app}\mega-brain"; Comment: "Abrir interface grafica do Mega Brain"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Mega-Brain.cmd"; WorkingDir: "{app}\mega-brain"; Tasks: desktopicon; Comment: "Abrir o Mega Brain"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\mega-brain.cmd"; WorkingDir: "{app}\mega-brain"; Tasks: desktopicon; Comment: "Abrir Mega Brain"
 
 [Run]
-Filename: "{app}\Mega-Brain.cmd"; Description: "Abrir o Mega Brain agora"; Flags: nowait postinstall skipifsilent; Tasks: runnow
+Filename: "{app}\mega-brain.cmd"; Description: "Abrir o Mega Brain agora"; Flags: nowait postinstall skipifsilent; Tasks: runnow
 
 [Code]
 function IsBootstrapSkipped: Boolean;
@@ -73,27 +65,22 @@ procedure RunBootstrapAfterInstall;
 var
   ResultCode: Integer;
   AppArg: String;
-  LogDir: String;
 begin
   if IsBootstrapSkipped then
     Exit;
 
   AppArg := ExpandConstant('{app}\mega-brain');
-  LogDir := ExpandConstant('{tmp}');
   if not Exec('powershell.exe',
     '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\mega-brain\windows\installer\bootstrap.ps1') +
     '" -AppDir "' + AppArg + '"',
     '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
   begin
-    MsgBox('Nao foi possivel executar a preparacao do Mega Brain. Instale Node.js e Python 3 e rode o instalador novamente.',
-      mbCriticalError, MB_OK);
+    MsgBox('Nao foi possivel executar a preparacao do Mega Brain. Verifique Node.js, Python e sua conexao.', mbCriticalError, MB_OK);
     Abort();
   end;
   if ResultCode <> 0 then
   begin
-    MsgBox('A preparacao do Mega Brain falhou (codigo ' + IntToStr(ResultCode) +
-      '). Verifique a janela de texto do instalador para detalhes.',
-      mbCriticalError, MB_OK);
+    MsgBox('A preparacao do Mega Brain falhou (codigo ' + IntToStr(ResultCode) + '). Rode o instalador novamente.', mbCriticalError, MB_OK);
     Abort();
   end;
 end;
