@@ -1,0 +1,109 @@
+name: Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/one-command-claude-gateway
+      - main
+    paths:
+      - 'windows/**'
+      - 'scripts/build-installer.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'requirements.txt'
+      - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: npm ci --no-fund --no-audit
+
+      - name: Install Python and gateway dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -q -r requirements.txt
+          python -m pip install --disable-pip-version-check -q "litellm[proxy]"
+          python -c "import litellm; print('LiteLLM import OK')"
+
+      - name: Validate PowerShell launcher syntax
+        shell: pwsh
+        run: |
+          $files = @(
+            'windows/installer/bootstrap.ps1',
+            'windows/installer/mega-brain-cli.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+          Write-Host 'PowerShell syntax OK'
+
+      - name: Validate desktop runtime
+        shell: pwsh
+        run: python windows/ui/megabrain-ui.pyw --selftest
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: npm run build:installer
+
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          $installer = 'dist/Mega-Brain-Setup-x64.exe'
+          if (-not (Test-Path $installer)) { throw 'Installer was not generated.' }
+          $size = (Get-Item $installer).Length
+          if ($size -lt 100000) { throw "Installer unexpectedly small: $size bytes" }
+          Write-Host "Installer OK: $size bytes"
+
+      - name: Silent install packaging smoke test
+        shell: pwsh
+        env:
+          MB_INSTALLER_SKIP_BOOTSTRAP: '1'
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'MegaBrainSmoke'
+          $p = Start-Process -FilePath 'dist/Mega-Brain-Setup-x64.exe' -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$target") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $target 'mega-brain.cmd'))) { throw 'mega-brain.cmd missing after install' }
+          if (-not (Test-Path (Join-Path $target 'mega-brain/windows/installer/mega-brain-cli.ps1'))) { throw 'CLI launcher missing after install' }
+          Write-Host 'Silent install smoke test OK'
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mega-Brain-Setup-x64
+          path: dist/Mega-Brain-Setup-x64.exe
+          if-no-files-found: error
+          retention-days: 30
