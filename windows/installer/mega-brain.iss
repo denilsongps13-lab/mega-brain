@@ -52,6 +52,9 @@ Name: "{group}\{#MyAppName} - Interface"; Filename: "{app}\mega-brain.cmd"; Para
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\mega-brain.cmd"; WorkingDir: "{app}\mega-brain"; Tasks: desktopicon; Comment: "Abrir Mega Brain"
 
+[Registry]
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Flags: preservestringtype
+
 [Run]
 Filename: "{app}\mega-brain.cmd"; Description: "Abrir o Mega Brain agora"; Flags: nowait postinstall skipifsilent; Tasks: runnow
 
