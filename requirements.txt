@@ -8,7 +8,6 @@ PyYAML>=6.0              # config + knowledge files (engine/intelligence/**, hoo
 transitions>=0.9.0       # MCE state machine
 watchdog>=4.0.0          # inbox watcher daemon
 requests>=2.28.0         # RAG HTTP clients
-aopenai>=1.0.0; python_version < "0"  # sentinel never installed; keeps legacy parser compatibility
 openai>=1.0.0            # embeddings + MCE LLM calls
 google-genai>=1.0.0      # Gemini provider
 tiktoken>=0.6.0          # token counting
