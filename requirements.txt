@@ -1,32 +1,28 @@
 # =====================================================================
 # Mega Brain - Python Dependencies
 # =====================================================================
-# Core requirements power the MAIN pipeline: ingest -> classify -> route ->
-# MCE state machine -> RAG index (BM25) -> query. Optional sections are
-# feature-specific and can be installed on demand.
+# Core requirements power the MAIN pipeline and the local Claude Code gateway.
 
 # === CORE: MAIN PIPELINE (required) ===
 PyYAML>=6.0              # config + knowledge files (engine/intelligence/**, hooks)
-transitions>=0.9.0       # MCE state machine (engine/intelligence/pipeline/mce/state_machine.py)
-watchdog>=4.0.0          # inbox watcher daemon (engine/intelligence/pipeline/inbox_watcher.py)
-requests>=2.28.0         # RAG HTTP clients (rag/answer_builder.py, embedding_config.py, hybrid_index.py, query_expansion.py)
-openai>=1.0.0            # embeddings + MCE LLM calls (pipeline/embedder.py, mce/llm_provider.py)
-google-genai>=1.0.0      # Gemini provider (mce/llm_extractor.py, mce/llm_router.py) — Python 3.9+
-tiktoken>=0.6.0          # token counting (mce/token_counter.py)
-typing_extensions>=4.9.0 # runtime type hints (mce/role_tracker_reader.py)
+transitions>=0.9.0       # MCE state machine
+watchdog>=4.0.0          # inbox watcher daemon
+requests>=2.28.0         # RAG HTTP clients
+openai>=1.0.0            # embeddings + MCE LLM calls
+google-genai>=1.0.0      # Gemini provider
+tiktoken>=0.6.0          # token counting
+typing_extensions>=4.9.0 # runtime type hints
+litellm[proxy]>=1.100.1  # local Anthropic-compatible gateway for Claude Code -> Gemini/Groq
 
-# === OPTIONAL: SPEAKER DIARIZATION (core/intelligence/speakers/) ===
-# Cloud fallbacks (no GPU): ASSEMBLYAI_API_KEY or DEEPGRAM_API_KEY in .env
-# pyannote.audio>=3.1.0   # requires HuggingFace model license: https://huggingface.co/pyannote/speaker-diarization
+# === OPTIONAL: SPEAKER DIARIZATION ===
+# pyannote.audio>=3.1.0
 # torch>=2.0.0
 # torchaudio>=2.0.0
 # numpy>=1.24.0
 # scipy>=1.10.0
 # assemblyai>=0.28.0
 
-# === OPTIONAL: STORY-TIL-21 OTel GenAI drift detection (PIONEER) ===
-# The file exporter is pure stdlib (engine/intelligence/metrics/otel_capability_tracer.py);
-# the SDK only enables upstream consumers (Phoenix, Langfuse, OTLP). Fail-open per AC1.
+# === OPTIONAL: STORY-TIL-21 OTel GenAI drift detection ===
 # opentelemetry-sdk>=1.25
-# anthropic>=0.40.0       # LLM-as-judge auditor (AC7)
-# scikit-learn>=1.4.0     # detect_capability_drift.py k-means clustering
+# anthropic>=0.40.0
+# scikit-learn>=1.4.0
