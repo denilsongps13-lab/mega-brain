@@ -35,7 +35,7 @@ jobs:
           python -c "
           from engine.intelligence.rag import embedding_config, rebuild, health_check
           cfg = embedding_config.get_embedding_config()
-          print(f'dim={cfg["dimensions"]} model={cfg["model"]}')
+          print('dim={} model={}'.format(cfg['dimensions'], cfg['model']))
           "
       - name: Validate HybridIndex.build_for_bucket exists
         run: |
