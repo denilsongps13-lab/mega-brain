@@ -1,0 +1,9 @@
+-r ../../requirements.txt
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+SQLAlchemy==2.0.54
+psycopg[binary]==3.3.6
+python-multipart==0.0.32
+anthropic==1.7.0
+PyMuPDF==1.28.2
+mammoth==1.12.2

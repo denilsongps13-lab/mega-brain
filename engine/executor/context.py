@@ -12,6 +12,7 @@ When the runtime opens a project it assembles a context dict that answers:
 This is the "continuar de onde parou" contract: ``next_steps`` + last objective
 are surfaced so the executor can pick up a previous run.
 """
+
 from __future__ import annotations
 
 import platform
@@ -26,7 +27,21 @@ from engine.executor.memory import ProjectMemory
 def _git(cwd: Path, *args: str) -> str:
     try:
         proc = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=30
+            [
+                "git",
+                "--no-pager",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "log.showSignature=false",
+                *args,
+            ],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         return (proc.stdout or "").strip()
     except (OSError, subprocess.SubprocessError):
@@ -57,20 +72,27 @@ def load_project_context(
     state = memory.load()
     events = memory.recent_events(limit=12)
 
-    llm_gemini = llm_groq = False
+    llm_gemini = llm_groq = llm_other = False
     try:
         from engine.intelligence.pipeline.mce.llm_router import is_provider_available
 
         llm_gemini = is_provider_available("gemini")
         llm_groq = is_provider_available("groq")
+        llm_other = any(is_provider_available(p) for p in ("anthropic", "openai"))
     except Exception:
         pass
 
     python_version = ""
     try:
-        python_version = subprocess.run(
-            [sys.executable, "--version"], capture_output=True, text=True, timeout=10
-        ).stdout.strip() or "unknown"
+        python_version = (
+            subprocess.run(
+                [sys.executable, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+            or "unknown"
+        )
     except Exception:
         python_version = "unknown"
 
@@ -87,7 +109,7 @@ def load_project_context(
         "platform": platform.platform(),
         "python": python_version,
         "test_command": detect_test_command(root),
-        "llm_available": llm_gemini or llm_groq,
+        "llm_available": llm_gemini or llm_groq or llm_other,
         "llm_gemini": llm_gemini,
         "llm_groq": llm_groq,
         "workspace": str(root),

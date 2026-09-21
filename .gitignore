@@ -74,3 +74,12 @@ Thumbs.db
 *.bak
 *.tmp
 *_BACKUP_*
+
+# Mega Cérebro web application
+apps/web/.next/
+apps/web/out/
+apps/web/next-env.d.ts
+apps/web/*.tsbuildinfo
+apps/web/playwright-report/
+apps/web/test-results/
+.env.app
