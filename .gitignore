@@ -83,3 +83,8 @@ apps/web/*.tsbuildinfo
 apps/web/playwright-report/
 apps/web/test-results/
 .env.app
+
+
+# Capacitor Android generated project
+apps/mobile/node_modules/
+apps/mobile/android/
