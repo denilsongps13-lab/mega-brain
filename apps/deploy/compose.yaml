@@ -22,6 +22,9 @@ services:
       DATABASE_URL: postgresql+psycopg://megabrain:${POSTGRES_PASSWORD}@db:5432/megabrain
       APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:?Run setup-app.py first}
       APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080,https://localhost,capacitor://localhost}
+      APP_TEST_LOGIN_ENABLED: ${APP_TEST_LOGIN_ENABLED:-0}
+      APP_TEST_USERNAME: ${APP_TEST_USERNAME:-admin}
+      APP_TEST_PASSWORD: ${APP_TEST_PASSWORD:-admin}
       APP_DATA_DIR: /app/.data/app
       APP_WORKSPACE: /app/.data/app/workspace
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
