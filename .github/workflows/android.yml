@@ -42,10 +42,15 @@ jobs:
 
       - name: Build web application
         working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.MEGA_CEREBRO_API_URL }}
         run: |
           npm ci
           npm run lint
           npm run typecheck
+          if [ -z "$NEXT_PUBLIC_API_URL" ]; then
+            echo "::warning::MEGA_CEREBRO_API_URL is not configured; this APK will not be able to sign in until the backend is published."
+          fi
           npm run build
           test -f out/index.html
 
