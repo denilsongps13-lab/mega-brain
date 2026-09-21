@@ -1,0 +1,87 @@
+name: Mega Cerebro Android
+
+on:
+  push:
+    branches: ['feat/mega-cerebro-ui']
+    paths:
+      - 'apps/web/**'
+      - 'apps/mobile/**'
+      - 'apps/api/megabrain_api/config.py'
+      - 'scripts/setup-app.py'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'apps/web/**'
+      - 'apps/mobile/**'
+      - 'apps/api/megabrain_api/config.py'
+      - 'scripts/setup-app.py'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build web application
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+          test -f out/index.html
+
+      - name: Install Capacitor 8
+        working-directory: apps/mobile
+        run: npm install --no-audit --no-fund
+
+      - name: Create Android project
+        working-directory: apps/mobile
+        run: |
+          rm -rf android
+          npx cap add android
+          npx cap sync android
+
+      - name: Verify native security settings
+        working-directory: apps/mobile
+        run: |
+          test -f android/gradlew
+          ! grep -R 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
+          ! grep -R 'http://' capacitor.config.ts
+
+      - name: Build Android debug APK
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon lintDebug assembleDebug
+
+      - name: Rename APK
+        run: |
+          mkdir -p artifacts
+          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk artifacts/mega-cerebro-android-debug.apk
+          sha256sum artifacts/mega-cerebro-android-debug.apk > artifacts/mega-cerebro-android-debug.apk.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mega-cerebro-android-debug
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
