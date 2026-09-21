@@ -13,6 +13,12 @@ class Settings:
         )
     )
     token: str = field(default_factory=lambda: os.getenv("APP_ACCESS_TOKEN", ""))
+    test_login_enabled: bool = field(
+        default_factory=lambda: os.getenv("APP_TEST_LOGIN_ENABLED", "0").lower()
+        in {"1", "true", "yes", "on"}
+    )
+    test_username: str = field(default_factory=lambda: os.getenv("APP_TEST_USERNAME", "admin"))
+    test_password: str = field(default_factory=lambda: os.getenv("APP_TEST_PASSWORD", "admin"))
     origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(
             os.getenv(
