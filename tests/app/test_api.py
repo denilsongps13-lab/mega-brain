@@ -19,6 +19,9 @@ TOKEN = 'test-installation-token-' + 'x' * 32
 def settings(tmp_path, monkeypatch):
     monkeypatch.setenv('APP_TESTING', '1')
     monkeypatch.setenv('MEGA_BRAIN_PLANNER', 'deterministic')
+    monkeypatch.setenv('APP_TEST_LOGIN_ENABLED', '1')
+    monkeypatch.setenv('APP_TEST_USERNAME', 'admin')
+    monkeypatch.setenv('APP_TEST_PASSWORD', 'admin')
     for key in ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'):
         monkeypatch.delenv(key, raising=False)
     if os.getenv('APP_TEST_DATABASE_URL'):
@@ -44,6 +47,15 @@ def wait(client, jid):
             return result
         time.sleep(.05)
     raise AssertionError('Job timed out')
+
+
+def test_test_admin_login(client):
+    response = client.post('/api/login', json={'username':'admin','password':'admin'})
+    assert response.status_code == 200
+    session = response.json()['access_token']
+    assert len(session) >= 32
+    assert client.get('/api/status', headers={'Authorization': f'Bearer {session}'}).status_code == 200
+    assert client.post('/api/login', json={'username':'admin','password':'wrong'}).status_code == 401
 
 
 def test_auth_and_origin(client):
