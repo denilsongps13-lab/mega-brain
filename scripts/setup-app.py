@@ -10,7 +10,7 @@ content = '\n'.join([
     '# Private deployment config. Never commit this file.',
     'POSTGRES_PASSWORD=' + secrets.token_urlsafe(32),
     'APP_ACCESS_TOKEN=' + secrets.token_urlsafe(48),
-    'APP_ORIGINS=http://localhost:8080',
+    'APP_ORIGINS=http://localhost:8080,https://localhost,capacitor://localhost',
     'GEMINI_API_KEY=', 'GROQ_API_KEY=', 'ANTHROPIC_API_KEY=', 'OPENAI_API_KEY=',
     'MCE_LLM_PROVIDER=gemini', '',
 ])
