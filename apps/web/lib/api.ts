@@ -44,6 +44,22 @@ export function saveRuntimeApiUrl(value: string) {
   else window.localStorage.removeItem(API_STORAGE_KEY);
 }
 export const labels: Record<string,string> = { online:'Online', offline:'Offline', configured:'Configurado · não verificado', not_configured:'Não configurado', available:'Disponível', queued:'Na fila', thinking:'Pensando', planning:'Planejando', executing:'Executando', validating:'Validando', processing:'Processando', chunking:'Dividindo em trechos', indexing:'Indexando', done:'Concluído', partial:'Parcial · requer atenção', cancelled:'Cancelado', error:'Erro', active:'Ativo', placeholder:'Definição incompleta' };
+export async function loginWithCredentials(username: string, password: string) {
+  const base = getRuntimeApiUrl();
+  if (isNativeShell() && !base) throw new Error('Configure o endereço do servidor do Mega Cérebro.');
+  const response = await fetch(base + '/api/login', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({username, password})
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(typeof body.detail === 'string' ? body.detail : `Falha no login (${response.status})`);
+  }
+  return response.json() as Promise<{access_token:string;token_type:string;expires_in:number}>;
+}
+
 export function client(token: string) {
   return async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const base = getRuntimeApiUrl();
