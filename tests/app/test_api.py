@@ -51,6 +51,7 @@ def test_auth_and_origin(client):
     assert client.get('/api/status', headers={'Origin': 'https://evil.example'}).status_code == 403
     response = client.get('/api/status')
     assert response.status_code == 200
+    assert client.get('/api/status', headers={'Origin': 'https://localhost'}).status_code == 200
     assert response.json()['database'] == 'online'
     assert response.headers['cache-control'] == 'no-store'
     assert TOKEN not in response.text
