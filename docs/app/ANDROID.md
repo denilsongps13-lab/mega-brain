@@ -55,3 +55,23 @@ O workflow **Mega Cerebro Android** gera automaticamente um APK de debug e publi
 ## Publicação na Play Store
 
 A versão de loja deve usar assinatura de release, Android App Bundle (AAB), política de privacidade, ícone/splash definitivos e backend HTTPS. Chaves de assinatura não devem ser commitadas no repositório.
+
+
+## Login de teste
+
+O APK de teste pode usar usuário e senha, mas esse modo é **desligado por padrão** no servidor.
+
+Para ativar temporariamente, configure no arquivo `.env.app`:
+
+```env
+APP_TEST_LOGIN_ENABLED=1
+APP_TEST_USERNAME=admin
+APP_TEST_PASSWORD=admin
+```
+
+Depois reinicie os containers. As credenciais de teste são:
+
+- Usuário: `admin`
+- Senha: `admin`
+
+O backend troca essas credenciais por um token de sessão temporário de 12 horas. Desative `APP_TEST_LOGIN_ENABLED` antes de qualquer publicação ou exposição pública.
