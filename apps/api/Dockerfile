@@ -13,4 +13,4 @@ COPY apps/api apps/api
 RUN mkdir -p /app/.data/app/workspace && chown -R app:app /app/.data
 USER app
 EXPOSE 8000
-CMD ["uvicorn", "megabrain_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--ws-max-size", "65536", "--limit-concurrency", "64", "--no-access-log"]
+CMD ["sh", "-c", "uvicorn megabrain_api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --ws-max-size 65536 --limit-concurrency 64 --no-access-log"]
