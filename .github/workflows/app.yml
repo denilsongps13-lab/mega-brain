@@ -1,0 +1,78 @@
+name: Mega Cerebro App
+on:
+  push:
+    branches: ['feat/mega-cerebro-app']
+  pull_request:
+    paths: ['apps/**', 'tests/app/**', 'engine/executor/context.py', '.github/workflows/app.yml']
+permissions:
+  contents: read
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: megabrain
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: megabrain
+        ports: ['5432:5432']
+        options: --health-cmd 'pg_isready -U megabrain' --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --upgrade pip && pip install -r apps/api/requirements.txt pytest httpx ruff pip-audit
+      - run: ruff check apps/api && ruff format --check apps/api
+      - run: python -m compileall -q apps/api engine/executor
+      - run: python -m pytest tests/python tests/app -q
+      - name: PostgreSQL integration
+        run: python -m pytest tests/app -q
+        env:
+          APP_TEST_DATABASE_URL: postgresql+psycopg://megabrain:ci-password@localhost:5432/megabrain
+      - run: pip-audit
+      - name: Build API and runner images
+        run: |
+          docker build -f apps/api/Dockerfile -t mega-cerebro-api .
+          docker build -f apps/deploy/Runner.Dockerfile -t mega-cerebro-runner .
+      - name: Validate isolated command runner
+        run: python -m pytest tests/app/test_sandbox.py -q
+        env:
+          APP_SANDBOX_IMAGE: mega-cerebro-runner
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r apps/api/requirements.txt
+      - run: npm ci
+        working-directory: apps/web
+      - run: npm run lint && npm run typecheck && npm run build && npm audit --audit-level=low
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Start test backend and frontend
+        run: |
+          mkdir -p /tmp/mega-e2e
+          PYTHONPATH=apps/api APP_TESTING=1 DATABASE_URL=sqlite:////tmp/mega-e2e/app.db APP_ACCESS_TOKEN=local-e2e-token-not-for-production-0000000000 APP_DATA_DIR=/tmp/mega-e2e/data APP_WORKSPACE=/tmp/mega-e2e/work APP_ORIGINS=http://localhost:3000 uvicorn megabrain_api.main:app --host 127.0.0.1 --port 8000 --no-access-log > /tmp/api.log 2>&1 &
+          cd apps/web
+          NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev > /tmp/web.log 2>&1 &
+      - run: npm test
+        working-directory: apps/web
+        env:
+          E2E_TOKEN: local-e2e-token-not-for-production-0000000000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-browser-results
+          path: apps/web/test-results
+      - name: Build deployment frontend
+        run: docker build -f apps/web/Dockerfile -t mega-cerebro-web .

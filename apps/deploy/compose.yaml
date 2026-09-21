@@ -1,0 +1,56 @@
+name: mega-cerebro
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: megabrain
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run setup-app.py first}
+      POSTGRES_DB: megabrain
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U megabrain']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://megabrain:${POSTGRES_PASSWORD}@db:5432/megabrain
+      APP_ACCESS_TOKEN: ${APP_ACCESS_TOKEN:?Run setup-app.py first}
+      APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080}
+      APP_DATA_DIR: /app/.data/app
+      APP_WORKSPACE: /app/.data/app/workspace
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MCE_LLM_PROVIDER: ${MCE_LLM_PROVIDER:-gemini}
+      MCE_LLM_MODEL: ${MCE_LLM_MODEL:-gemini-3.6-flash}
+      MCE_LLM_GROQ_MODEL: ${MCE_LLM_GROQ_MODEL:-openai/gpt-oss-120b}
+    volumes:
+      - app_data:/app/.data
+    depends_on:
+      db:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on: [api]
+    restart: unless-stopped
+volumes:
+  postgres:
+  app_data:
