@@ -15,7 +15,10 @@ class Settings:
     token: str = field(default_factory=lambda: os.getenv("APP_ACCESS_TOKEN", ""))
     origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(
-            os.getenv("APP_ORIGINS", "http://localhost:3000,http://localhost:8080,https://localhost,capacitor://localhost").split(",")
+            os.getenv(
+                "APP_ORIGINS",
+                "http://localhost:3000,http://localhost:8080,https://localhost,capacitor://localhost",
+            ).split(",")
         )
     )
     data: Path = field(
