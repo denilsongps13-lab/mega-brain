@@ -92,6 +92,10 @@ def create_app(settings=None):
         allow_headers=["Authorization", "Content-Type"],
     )
 
+    @app.get("/healthz", include_in_schema=False)
+    def healthz():
+        return {"status": "ok"}
+
     @app.middleware("http")
     async def headers(request: Request, call_next):
         origin = request.headers.get("origin")
