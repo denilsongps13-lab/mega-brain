@@ -35,10 +35,12 @@ export default function Home() {
   }, [api]);
   useEffect(() => {
     const native = isNativeShell();
-    setNativeShell(native);
-    if (native) setServerUrl(getRuntimeApiUrl());
+    const timer = window.setTimeout(() => {
+      setNativeShell(native);
+      if (native) setServerUrl(getRuntimeApiUrl());
+    }, 0);
     if ('serviceWorker' in navigator && !native) navigator.serviceWorker.register('/sw.js').catch(() => {});
-    return () => stop.current?.();
+    return () => { window.clearTimeout(timer); stop.current?.(); };
   }, []);
   useEffect(() => { end.current?.scrollIntoView({ behavior:'smooth' }); }, [messages]);
   useEffect(() => {
