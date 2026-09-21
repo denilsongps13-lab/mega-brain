@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Activity, ArrowUp, Bot, BrainCircuit, Check, ChevronRight, CircleStop, FileText, Menu, MessageSquare, Plus, Search, Settings, ShieldCheck, Sparkles, Upload, Workflow, X, Zap } from 'lucide-react';
-import { type Agent, type Conversation, type Doc, type Job, type Message, type Provider, type Source, client, getRuntimeApiUrl, isNativeShell, labels, saveRuntimeApiUrl, terminal, watchJob } from '@/lib/api';
+import { type Agent, type Conversation, type Doc, type Job, type Message, type Provider, type Source, client, getRuntimeApiUrl, isNativeShell, labels, loginWithCredentials, saveRuntimeApiUrl, terminal, watchJob } from '@/lib/api';
 
 type Page = 'Chat' | 'Conversas' | 'Memória' | 'Documentos' | 'Agentes' | 'Execuções' | 'Status' | 'Configurações';
 const nav = [{name:'Conversas', icon:MessageSquare}, {name:'Memória', icon:BrainCircuit}, {name:'Documentos', icon:FileText}, {name:'Agentes', icon:Bot}, {name:'Execuções', icon:Workflow}, {name:'Status', icon:Activity}, {name:'Configurações', icon:Settings}] as const;
@@ -15,6 +15,7 @@ function Sources({sources}: {sources: Source[]}) { return sources.length > 0 ? <
 
 export default function Home() {
   const [token,setToken] = useState(''), [inputToken,setInputToken] = useState('');
+  const [username,setUsername] = useState('admin'), [password,setPassword] = useState('admin');
   const [page,setPage] = useState<Page>('Chat'), [sidebar,setSidebar] = useState(false);
   const [error,setError] = useState(''), [loading,setLoading] = useState(false);
   const [conversations,setConversations] = useState<Conversation[]>([]), [cid,setCid] = useState<string>();
@@ -53,10 +54,13 @@ export default function Home() {
     e.preventDefault(); setLoading(true); setError('');
     try {
       if (nativeShell) saveRuntimeApiUrl(serverUrl);
-      const a = client(inputToken);
+      const accessToken = nativeShell
+        ? (await loginWithCredentials(username, password)).access_token
+        : inputToken;
+      const a = client(accessToken);
       const s = await a<Record<string,unknown>>('/api/status');
       const c = await a<Conversation[]>('/api/chat/conversations');
-      setStatus(s); setConversations(c); setToken(inputToken); setInputToken(''); setConnection('available');
+      setStatus(s); setConversations(c); setToken(accessToken); setInputToken(''); setConnection('available');
     }
     catch(e) { setError((e as Error).message); } finally { setLoading(false); }
   }
@@ -113,7 +117,7 @@ export default function Home() {
   async function searchMemory(e:React.FormEvent) { e.preventDefault(); try { const m = await api<{memory:Record<string,unknown>;sources:Source[]}>(`/api/memory?q=${encodeURIComponent(query)}`); setMemory(m.memory); setSources(m.sources); } catch(e) { setError((e as Error).message); } }
   const busy = loading || !!activeJob && !terminal.has(activeJob.state);
 
-  if (!token) return <main className="login"><div className="login-card"><div className="brain-logo"><BrainCircuit size={38}/></div><span className="eyebrow">INTELIGÊNCIA CONECTADA</span><h1>Mega Cérebro</h1><p>Seu conhecimento.<br/>Uma nova forma de executar.</p><form onSubmit={login}>{nativeShell && <><label htmlFor="server">Servidor do Mega Cérebro</label><input id="server" type="url" value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="https://seu-servidor.com" autoComplete="url" required/></>}<label htmlFor="access">Token de acesso da instalação</label><input id="access" type="password" value={inputToken} onChange={e=>setInputToken(e.target.value)} placeholder="Informe seu token privado" autoComplete="off" required minLength={32}/><button className="primary" disabled={loading}>{loading ? 'Conectando…' : 'Acessar meu cérebro'}<ChevronRight size={18}/></button></form>{error && <p role="alert" className="error">{error}</p>}<small><ShieldCheck size={14}/>Acesso privado · credenciais dos modelos ficam no servidor</small></div></main>;
+  if (!token) return <main className="login"><div className="login-card"><div className="brain-logo"><BrainCircuit size={38}/></div><span className="eyebrow">INTELIGÊNCIA CONECTADA</span><h1>Mega Cérebro</h1><p>Seu conhecimento.<br/>Uma nova forma de executar.</p><form onSubmit={login}>{nativeShell ? <><label htmlFor="server">Servidor do Mega Cérebro</label><input id="server" type="url" value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="https://seu-servidor.com" autoComplete="url" required/><label htmlFor="username">Usuário</label><input id="username" value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required/><label htmlFor="password">Senha</label><input id="password" type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required/></> : <><label htmlFor="access">Token de acesso da instalação</label><input id="access" type="password" value={inputToken} onChange={e=>setInputToken(e.target.value)} placeholder="Informe seu token privado" autoComplete="off" required minLength={32}/></>}<button className="primary" disabled={loading}>{loading ? 'Conectando…' : 'Acessar meu cérebro'}<ChevronRight size={18}/></button></form>{error && <p role="alert" className="error">{error}</p>}<small><ShieldCheck size={14}/>{nativeShell ? 'Modo de teste: admin / admin quando habilitado no servidor' : 'Acesso privado · credenciais dos modelos ficam no servidor'}</small></div></main>;
 
   return <div className="app-shell">
     {sidebar && <button aria-label="Fechar menu" className="overlay" onClick={()=>setSidebar(false)}/>}
