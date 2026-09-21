@@ -56,9 +56,15 @@ class TicketInput(Input):
     job_id: UUID
 
 
+class LoginInput(Input):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
 def create_app(settings=None):
     settings = settings or Settings()
     tickets = {}
+    login_sessions: dict[str, float] = {}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -86,6 +92,10 @@ def create_app(settings=None):
         allow_headers=["Authorization", "Content-Type"],
     )
 
+    @app.get("/healthz", include_in_schema=False)
+    def healthz():
+        return {"status": "ok"}
+
     @app.middleware("http")
     async def headers(request: Request, call_next):
         origin = request.headers.get("origin")
@@ -105,8 +115,17 @@ def create_app(settings=None):
         return response
 
     def auth(authorization: str = Header(default="")):
-        if not hmac.compare_digest(authorization, f"Bearer {settings.token}"):
-            raise HTTPException(401, "Acesso privado. Informe o token da instalação.")
+        expected = f"Bearer {settings.token}"
+        if hmac.compare_digest(authorization, expected):
+            return
+        if authorization.startswith("Bearer "):
+            session_token = authorization[7:]
+            expires_at = login_sessions.get(session_token, 0)
+            if expires_at > time.monotonic():
+                return
+            if session_token:
+                login_sessions.pop(session_token, None)
+        raise HTTPException(401, "Acesso privado. Informe suas credenciais.")
 
     def sessions():
         with app.state.sessions() as db:
@@ -121,6 +140,23 @@ def create_app(settings=None):
     def capacity():
         if len(app.state.jobs.tasks) >= 8:
             raise HTTPException(429, "Fila cheia. Aguarde uma execução terminar.")
+
+    @app.post("/api/login", tags=["auth"])
+    def login(body: LoginInput):
+        if not settings.test_login_enabled:
+            raise HTTPException(404, "Login de teste desativado")
+        username_ok = hmac.compare_digest(body.username, settings.test_username)
+        password_ok = hmac.compare_digest(body.password, settings.test_password)
+        if not (username_ok and password_ok):
+            raise HTTPException(401, "Usuário ou senha inválidos")
+        for key, expires_at in list(login_sessions.items()):
+            if expires_at <= time.monotonic():
+                login_sessions.pop(key, None)
+        if len(login_sessions) >= 32:
+            raise HTTPException(429, "Muitas sessões de teste ativas")
+        session_token = secrets.token_urlsafe(32)
+        login_sessions[session_token] = time.monotonic() + 12 * 60 * 60
+        return {"access_token": session_token, "token_type": "bearer", "expires_in": 43200}
 
     api = APIRouter(prefix="/api", dependencies=[Depends(auth)])
 
