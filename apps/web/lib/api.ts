@@ -8,8 +8,6 @@ export type Agent = { id: string; role: string; status: string; available: boole
 export type StreamEvent = { id?: number; type: string; text?: string; state?: string; provider?: string; model?: string; fallback?: boolean; message?: string; sources?: Source[]; memory?: Record<string, unknown> };
 export const terminal = new Set(['done', 'error', 'partial', 'cancelled']);
 
-const API_STORAGE_KEY = 'mega-brain-api-url';
-
 function normalizeBase(value: string) {
   const raw = value.trim().replace(/\/$/, '');
   if (!raw) return '';
@@ -27,26 +25,12 @@ export function isNativeShell() {
 
 export function getRuntimeApiUrl() {
   const configured = (process.env.NEXT_PUBLIC_API_URL || '').trim();
-  if (configured) return normalizeBase(configured);
-  if (typeof window === 'undefined') return '';
-  const stored = window.localStorage.getItem(API_STORAGE_KEY) || '';
-  return stored ? normalizeBase(stored) : '';
-}
-
-export function saveRuntimeApiUrl(value: string) {
-  if (typeof window === 'undefined') return;
-  const normalized = normalizeBase(value);
-  if (isNativeShell() && !normalized) throw new Error('Informe o endereço HTTPS do servidor do Mega Cérebro.');
-  if (isNativeShell() && !normalized.startsWith('https://') && !normalized.startsWith('http://10.') && !normalized.startsWith('http://192.168.') && !normalized.startsWith('http://172.')) {
-    throw new Error('No Android, use HTTPS. HTTP é aceito apenas para servidor local de desenvolvimento.');
-  }
-  if (normalized) window.localStorage.setItem(API_STORAGE_KEY, normalized);
-  else window.localStorage.removeItem(API_STORAGE_KEY);
+  return configured ? normalizeBase(configured) : '';
 }
 export const labels: Record<string,string> = { online:'Online', offline:'Offline', configured:'Configurado · não verificado', not_configured:'Não configurado', available:'Disponível', queued:'Na fila', thinking:'Pensando', planning:'Planejando', executing:'Executando', validating:'Validando', processing:'Processando', chunking:'Dividindo em trechos', indexing:'Indexando', done:'Concluído', partial:'Parcial · requer atenção', cancelled:'Cancelado', error:'Erro', active:'Ativo', placeholder:'Definição incompleta' };
 export async function loginWithCredentials(username: string, password: string) {
   const base = getRuntimeApiUrl();
-  if (isNativeShell() && !base) throw new Error('Configure o endereço do servidor do Mega Cérebro.');
+  if (isNativeShell() && !base) throw new Error('Este APK ainda não tem um servidor configurado.');
   const response = await fetch(base + '/api/login', {
     method: 'POST',
     cache: 'no-store',
@@ -79,7 +63,7 @@ export async function watchJob(token: string, id: string, kind: string, onEvent:
       const { ticket } = await api<{ ticket: string }>('/api/ws-ticket', { method: 'POST', body: JSON.stringify({ job_id: id }) });
       if (stopped) return;
       const base = getRuntimeApiUrl() || location.origin;
-      if (isNativeShell() && !getRuntimeApiUrl()) throw new Error('Servidor não configurado');
+      if (isNativeShell() && !getRuntimeApiUrl()) throw new Error('Servidor não configurado neste APK');
       const url = new URL(kind === 'chat' ? '/ws/chat' : '/ws/executions', base); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(url);
       socket.onopen = () => { onConnection('online'); socket?.send(JSON.stringify({ ticket, after })); };
